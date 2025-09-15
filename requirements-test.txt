@@ -1,0 +1,29 @@
+# Testing dependencies for fiberwise-common
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+pytest-mock>=3.11.0
+pytest-xdist>=3.3.0
+pytest-html>=3.2.0
+
+# Additional testing utilities
+coverage>=7.2.0
+mock>=5.1.0
+
+# For async testing
+aiofiles>=23.1.0
+
+# For database testing
+aiosqlite>=0.19.0
+
+# For LLM response testing (if needed)
+httpx>=0.24.0
+
+# For YAML testing
+PyYAML>=6.0
+
+# Development dependencies
+black>=23.3.0
+isort>=5.12.0
+flake8>=6.0.0
+mypy>=1.4.0

@@ -1,0 +1,13 @@
+.aider*
+.env
+fiberwise_common/__pycache__/__init__.cpython-313.pyc
+*__pycache__*
+fiberwise_common.egg-info/dependency_links.txt
+fiberwise_common.egg-info/PKG-INFO
+fiberwise_common.egg-info/requires.txt
+fiberwise_common.egg-info/SOURCES.txt
+fiberwise_common.egg-info/top_level.txt
+fiberwise_common/database/__pycache__/__init__.cpython-313.pyc
+fiberwise_common/database/__pycache__/base.cpython-313.pyc
+fiberwise_common/database/__pycache__/manager.cpython-313.pyc
+*__pycache__*
