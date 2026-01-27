@@ -29,6 +29,14 @@ dependencies = [
     "passlib[bcrypt]>=1.7.4",
     "aiosqlite>=0.17.0",
     "asyncpg>=0.28.0",
+    "sqlparse",
+    "bleach",
+    "aiohttp",
+    "pyyaml",
+    "requests",
+    "httpx",
+    "duckdb",
+    "boto3",
 ]
 
 [project.optional-dependencies]
