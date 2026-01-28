@@ -1,13 +1,47 @@
+# Aider
 .aider*
+
+# Environment files
 .env
-fiberwise_common/__pycache__/__init__.cpython-313.pyc
-*__pycache__*
-fiberwise_common.egg-info/dependency_links.txt
-fiberwise_common.egg-info/PKG-INFO
-fiberwise_common.egg-info/requires.txt
-fiberwise_common.egg-info/SOURCES.txt
-fiberwise_common.egg-info/top_level.txt
-fiberwise_common/database/__pycache__/__init__.cpython-313.pyc
-fiberwise_common/database/__pycache__/base.cpython-313.pyc
-fiberwise_common/database/__pycache__/manager.cpython-313.pyc
-*__pycache__*
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Python byte code
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+*.egg-info/
+build/
+dist/
+
+# Compiled Python files
+*.pyc
+*.pyo
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+.cache
+
+# Virtual environments
+venv/
+env/
+ENV/
