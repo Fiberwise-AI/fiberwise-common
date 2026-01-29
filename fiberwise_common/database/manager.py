@@ -2,15 +2,18 @@
 Database initialization and management for FiberWise applications.
 
 Uses NexusQL as the underlying database engine. Handles connection lifecycle,
-schema initialization, and migration tracking.
+schema initialization, and migration tracking via NexusQL's MigrationRunner.
 """
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Optional
 
+from nexusql import DatabaseManager as NexusDB
+from nexusql.migrations import MigrationRunner
+
 from .provider import NexusQLProvider, create_database_provider
-from .sql_loader import load_sql_script
 
 logger = logging.getLogger(__name__)
 
@@ -57,62 +60,40 @@ class DatabaseManager:
             logger.error(f"Error closing database connection: {e}")
 
     async def apply_migrations(self) -> bool:
-        """Apply database migrations (schema init + numbered migrations)."""
-        try:
-            # Create migration tracking table
-            await self.provider.execute("""
-                CREATE TABLE IF NOT EXISTS schema_migrations (
-                    version TEXT PRIMARY KEY,
-                    applied_at TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
+        """Apply database migrations using NexusQL MigrationRunner.
 
-            # Get already-applied migrations
-            applied = []
+        Creates a dedicated nexusql DatabaseManager on the current thread
+        so that SQLite thread-affinity is satisfied (the NexusQLProvider's
+        inner connection lives on a separate executor thread).
+        """
+        loop = asyncio.get_event_loop()
+
+        def _run_migrations():
+            db = NexusDB(self.database_url)
+            db.connect()
             try:
-                rows = await self.provider.fetch_all(
-                    "SELECT version FROM schema_migrations ORDER BY version"
+                runner = MigrationRunner(
+                    db,
+                    migration_path=self.migrations_dir,
+                    migration_type="system",
                 )
-                applied = [r['version'] for r in rows]
-            except Exception:
-                pass
-
-            # Apply initial schema if not yet applied
-            if 'init' not in applied:
-                logger.info("Applying initial schema...")
+                # MigrationRunner methods are async def but internally synchronous,
+                # so we run the coroutine in a new event loop on this thread.
+                inner_loop = asyncio.new_event_loop()
                 try:
-                    schema = load_sql_script("init.sql")
-                    await self.provider.execute_script(schema)
-                    await self._mark_applied('init')
-                    logger.info("Initial schema applied successfully")
-                except FileNotFoundError:
-                    logger.warning("init.sql not found in package resources")
-                except Exception as e:
-                    logger.error(f"Failed to apply initial schema: {e}")
-                    raise
-                # Refresh applied list
-                rows = await self.provider.fetch_all(
-                    "SELECT version FROM schema_migrations ORDER BY version"
-                )
-                applied = [r['version'] for r in rows]
+                    return inner_loop.run_until_complete(runner.run_pending_migrations())
+                finally:
+                    inner_loop.close()
+            finally:
+                db.disconnect()
 
-            # Apply numbered migration files from the sql/ directory
-            if self.migrations_dir.exists():
-                migration_files = sorted(self.migrations_dir.glob("*.sql"))
-                for migration_file in migration_files:
-                    version = migration_file.stem
-                    if version == "init":
-                        continue
-                    if version not in applied:
-                        logger.info(f"Applying migration: {version}")
-                        try:
-                            sql = migration_file.read_text(encoding='utf-8')
-                            await self.provider.execute_script(sql)
-                            await self._mark_applied(version)
-                            logger.info(f"Applied migration: {version}")
-                        except Exception as e:
-                            logger.error(f"Migration {version} failed: {e}")
-                            raise
+        try:
+            result = await loop.run_in_executor(
+                self.provider._executor, _run_migrations
+            )
+            if not result:
+                logger.error("Database migrations failed")
+                return False
 
             logger.info("All migrations applied successfully")
             return True
@@ -120,18 +101,6 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Migration process failed: {e}")
             return False
-
-    async def _mark_applied(self, version: str):
-        """Record a migration as applied."""
-        existing = await self.provider.fetch_one(
-            "SELECT version FROM schema_migrations WHERE version = :version",
-            {"version": version},
-        )
-        if not existing:
-            await self.provider.execute(
-                "INSERT INTO schema_migrations (version) VALUES (:version)",
-                {"version": version},
-            )
 
     async def health_check(self) -> bool:
         """Perform a health check on the database connection."""

@@ -5,7 +5,7 @@ Tests DatabaseManager initialization, migration tracking, and lifecycle
 using real SQLite databases (no mocking needed since SQLite is always available).
 """
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from fiberwise_common.database.manager import DatabaseManager
 
@@ -77,10 +77,10 @@ class TestDatabaseManagerLifecycle:
 
 
 class TestDatabaseManagerMigrations:
-    """Test migration application and tracking."""
+    """Test migration application and tracking via NexusQL MigrationRunner."""
 
     @pytest.mark.asyncio
-    async def test_creates_schema_migrations_table(self, tmp_path):
+    async def test_creates_ia_migrations_table(self, tmp_path):
         mgr = DatabaseManager(
             f"sqlite:///{tmp_path / 'test.db'}",
             migrations_dir=tmp_path / "empty_dir",
@@ -90,14 +90,13 @@ class TestDatabaseManagerMigrations:
         await mgr.apply_migrations()
 
         row = await mgr.provider.fetch_one(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_migrations'"
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='ia_migrations'"
         )
         assert row is not None
         await mgr.shutdown()
 
     @pytest.mark.asyncio
-    @patch("fiberwise_common.database.manager.load_sql_script", side_effect=FileNotFoundError)
-    async def test_applies_numbered_migrations(self, _mock_load, tmp_path):
+    async def test_applies_numbered_migrations(self, tmp_path):
         migrations = tmp_path / "migrations"
         migrations.mkdir()
         (migrations / "001_create_items.sql").write_text(
@@ -124,9 +123,9 @@ class TestDatabaseManagerMigrations:
         assert row["name"] == "test"
         assert row["price"] == 1.99
 
-        # Verify tracking
+        # Verify tracking in ia_migrations
         rows = await mgr.provider.fetch_all(
-            "SELECT version FROM schema_migrations ORDER BY version"
+            "SELECT version FROM ia_migrations ORDER BY version"
         )
         versions = [r["version"] for r in rows]
         assert "001_create_items" in versions
@@ -134,8 +133,7 @@ class TestDatabaseManagerMigrations:
         await mgr.shutdown()
 
     @pytest.mark.asyncio
-    @patch("fiberwise_common.database.manager.load_sql_script", side_effect=FileNotFoundError)
-    async def test_skips_already_applied(self, _mock_load, tmp_path):
+    async def test_skips_already_applied(self, tmp_path):
         migrations = tmp_path / "migrations"
         migrations.mkdir()
         (migrations / "001_create_t.sql").write_text(
@@ -153,13 +151,14 @@ class TestDatabaseManagerMigrations:
         # Second run — should not fail or duplicate
         assert await mgr.apply_migrations() is True
 
-        rows = await mgr.provider.fetch_all("SELECT version FROM schema_migrations")
+        rows = await mgr.provider.fetch_all(
+            "SELECT version FROM ia_migrations WHERE migration_type = 'system'"
+        )
         assert len(rows) == 1
         await mgr.shutdown()
 
     @pytest.mark.asyncio
-    @patch("fiberwise_common.database.manager.load_sql_script", side_effect=FileNotFoundError)
-    async def test_migration_failure_returns_false(self, _mock_load, tmp_path):
+    async def test_migration_failure_returns_false(self, tmp_path):
         migrations = tmp_path / "migrations"
         migrations.mkdir()
         (migrations / "001_bad.sql").write_text("THIS IS NOT VALID SQL;")
@@ -174,8 +173,7 @@ class TestDatabaseManagerMigrations:
         await mgr.shutdown()
 
     @pytest.mark.asyncio
-    @patch("fiberwise_common.database.manager.load_sql_script", side_effect=FileNotFoundError)
-    async def test_applies_in_sorted_order(self, _mock_load, tmp_path):
+    async def test_applies_in_sorted_order(self, tmp_path):
         migrations = tmp_path / "migrations"
         migrations.mkdir()
         # Write out of order to make sure sort matters
@@ -197,7 +195,7 @@ class TestDatabaseManagerMigrations:
         assert await mgr.apply_migrations() is True
 
         rows = await mgr.provider.fetch_all(
-            "SELECT version FROM schema_migrations ORDER BY version"
+            "SELECT version FROM ia_migrations ORDER BY version"
         )
         versions = [r["version"] for r in rows]
         assert versions == ["001_first", "002_second", "003_third"]
