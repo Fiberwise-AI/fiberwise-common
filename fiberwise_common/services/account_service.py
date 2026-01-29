@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 
 from .base_service import BaseService
-from ..database.query_adapter import QueryAdapter, ParameterStyle
 import logging
 
 logger = logging.getLogger(__name__)
@@ -31,7 +30,6 @@ class AccountService(BaseService):
     
     def __init__(self, db_provider, config_dir: Optional[str] = None):
         super().__init__(db_provider)
-        self.query_adapter = QueryAdapter(ParameterStyle.SQLITE)
         self.config_dir = Path(config_dir or os.path.expanduser("~/.fiberwise/configs"))
         self.legacy_config_dir = Path(os.path.expanduser("~/.fiber/configs"))
         
@@ -71,15 +69,23 @@ class AccountService(BaseService):
             await self._save_config_to_file(name, config)
             
             # Save to database
-            query = self.query_adapter.convert_query("""
-                INSERT OR REPLACE INTO account_configs 
+            query = """
+                INSERT OR REPLACE INTO account_configs
                 (name, provider, api_key, base_url, user_id, config_data, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            """, ParameterStyle.POSTGRESQL)
-            
+                VALUES (:name, :provider, :api_key, :base_url, :user_id, :config_data, :created_at, :updated_at)
+            """
+
             await self.db.execute(
-                query, name, provider, api_key, base_url, user_id,
-                json.dumps(config), config["created_at"], config["updated_at"]
+                query, {
+                    "name": name,
+                    "provider": provider,
+                    "api_key": api_key,
+                    "base_url": base_url,
+                    "user_id": user_id,
+                    "config_data": json.dumps(config),
+                    "created_at": config["created_at"],
+                    "updated_at": config["updated_at"],
+                }
             )
             
             logger.info(f"Added account configuration: {name} ({provider})")
@@ -91,11 +97,11 @@ class AccountService(BaseService):
     
     async def get_account_config(self, name: str) -> Optional[Dict[str, Any]]:
         """Get a specific account configuration by name."""
-        query = self.query_adapter.convert_query("""
-            SELECT * FROM account_configs WHERE name = $1
-        """, ParameterStyle.POSTGRESQL)
-        
-        row = await self.db.fetch_one(query, name)
+        query = """
+            SELECT * FROM account_configs WHERE name = :name
+        """
+
+        row = await self.db.fetch_one(query, {"name": name})
         
         if row:
             config_data = json.loads(row['config_data'])
@@ -117,20 +123,20 @@ class AccountService(BaseService):
             List of configuration dictionaries
         """
         query = "SELECT * FROM account_configs WHERE 1=1"
-        params = []
-        
+        params = {}
+
         if provider:
-            query += " AND provider = ?"
-            params.append(provider)
-        
+            query += " AND provider = :provider"
+            params["provider"] = provider
+
         if user_id:
-            query += " AND user_id = ?"
-            params.append(user_id)
-        
+            query += " AND user_id = :user_id"
+            params["user_id"] = user_id
+
         query += " ORDER BY created_at DESC"
-        
+
         try:
-            rows = await self.db.fetch_all(query, *params)
+            rows = await self.db.fetch_all(query, params)
             
             configs = []
             for row in rows:
@@ -166,7 +172,7 @@ class AccountService(BaseService):
                 
                 # Set new default
                 result = await self.db.execute(
-                    "UPDATE account_configs SET is_default = 1 WHERE name = ?", name
+                    "UPDATE account_configs SET is_default = 1 WHERE name = :name", {"name": name}
                 )
                 
                 # SQLite provider returns lastrowid, not a result object
@@ -193,15 +199,15 @@ class AccountService(BaseService):
             Default configuration or None
         """
         query = "SELECT * FROM account_configs WHERE is_default = 1"
-        params = []
-        
+        params = {}
+
         if provider:
-            query += " AND provider = ?"
-            params.append(provider)
-        
+            query += " AND provider = :provider"
+            params["provider"] = provider
+
         query += " LIMIT 1"
-        
-        row = await self.db.fetch_one(query, *params)
+
+        row = await self.db.fetch_one(query, params)
         
         if row:
             return json.loads(row['config_data'])
@@ -223,7 +229,7 @@ class AccountService(BaseService):
         try:
             # Delete from database
             result = await self.db.execute(
-                "DELETE FROM account_configs WHERE name = ?", name
+                "DELETE FROM account_configs WHERE name = :name", {"name": name}
             )
             
             # Delete file if it exists

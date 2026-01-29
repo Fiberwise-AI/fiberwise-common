@@ -12,7 +12,6 @@ import uuid
 
 from .base_service import BaseService, ServiceError, NotFoundError, ValidationError
 from .security import get_password_hash, verify_password
-from ..database.query_adapter import QueryAdapter, ParameterStyle
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +24,6 @@ class UserService(BaseService):
     
     def __init__(self, db_provider):
         super().__init__(db_provider)
-        # Initialize query adapter for SQLite (since we're using SQLite)
-        self.query_adapter = QueryAdapter(ParameterStyle.SQLITE)
 
     async def get_user_by_id(self, user_id: int) -> Optional[Dict[str, Any]]:
         """
@@ -40,12 +37,11 @@ class UserService(BaseService):
         """
         query = """
             SELECT id, uuid, email, username, is_active, is_superuser, is_verified,
-                   first_name, last_name, full_name, avatar_url, 
+                   first_name, last_name, full_name, avatar_url,
                    timezone, locale, created_at, updated_at
-            FROM users WHERE id = $1
+            FROM users WHERE id = :user_id
         """
-        converted_query = self.query_adapter.convert_query(query)
-        return await self.db.fetch_one(converted_query, user_id)
+        return await self.db.fetch_one(query, {"user_id": user_id})
 
     async def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
         """
@@ -61,10 +57,9 @@ class UserService(BaseService):
             SELECT id, email, username, is_active, is_superuser, is_verified,
                    first_name, last_name, full_name, avatar_url,
                    timezone, locale, created_at, updated_at
-            FROM users WHERE email = $1
+            FROM users WHERE email = :email
         """
-        converted_query = self.query_adapter.convert_query(query)
-        return await self.db.fetch_one(converted_query, email)
+        return await self.db.fetch_one(query, {"email": email})
 
     async def get_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
         """
@@ -80,10 +75,9 @@ class UserService(BaseService):
             SELECT id, username, email, is_active, is_superuser, is_verified,
                    first_name, last_name, full_name, avatar_url,
                    timezone, locale, created_at, updated_at
-            FROM users WHERE username = $1
+            FROM users WHERE username = :username
         """
-        converted_query = self.query_adapter.convert_query(query)
-        return await self.db.fetch_one(converted_query, username)
+        return await self.db.fetch_one(query, {"username": username})
 
     async def get_user_by_email_or_username(self, identifier: str) -> Optional[Dict[str, Any]]:
         """
@@ -140,9 +134,8 @@ class UserService(BaseService):
         Returns:
             User record with password or None if not found
         """
-        query = "SELECT * FROM users WHERE email = $1"
-        converted_query = self.query_adapter.convert_query(query)
-        return await self.db.fetch_one(converted_query, email)
+        query = "SELECT * FROM users WHERE email = :email"
+        return await self.db.fetch_one(query, {"email": email})
 
     async def get_user_with_password_by_username(self, username: str) -> Optional[Dict[str, Any]]:
         """
@@ -154,9 +147,8 @@ class UserService(BaseService):
         Returns:
             User record with password or None if not found
         """
-        query = "SELECT * FROM users WHERE username = $1"
-        converted_query = self.query_adapter.convert_query(query)
-        return await self.db.fetch_one(converted_query, username)
+        query = "SELECT * FROM users WHERE username = :username"
+        return await self.db.fetch_one(query, {"username": username})
 
     async def get_user_with_password_by_email_or_username(self, identifier: str) -> Optional[Dict[str, Any]]:
         """
@@ -226,27 +218,30 @@ class UserService(BaseService):
                 is_active, is_superuser, is_verified, avatar_url,
                 timezone, locale, created_at, updated_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            VALUES (:uuid, :email, :username, :hashed_password, :first_name, :last_name, :full_name,
+                    :is_active, :is_superuser, :is_verified, :avatar_url,
+                    :timezone, :locale, :created_at, :updated_at)
         """
-        
-        converted_query = self.query_adapter.convert_query(query)
+
         await self.db.execute(
-            converted_query,
-            user_uuid,
-            user_data['email'],
-            user_data.get('username'),
-            user_data.get('hashed_password'),
-            user_data.get('first_name'),
-            user_data.get('last_name'),
-            user_data['full_name'],
-            user_data.get('is_active', True),
-            user_data.get('is_superuser', False),
-            user_data.get('is_verified', False),
-            user_data.get('avatar_url'),
-            user_data.get('timezone', 'UTC'),
-            user_data.get('locale', 'en'),
-            now,
-            now
+            query,
+            {
+                "uuid": user_uuid,
+                "email": user_data['email'],
+                "username": user_data.get('username'),
+                "hashed_password": user_data.get('hashed_password'),
+                "first_name": user_data.get('first_name'),
+                "last_name": user_data.get('last_name'),
+                "full_name": user_data['full_name'],
+                "is_active": user_data.get('is_active', True),
+                "is_superuser": user_data.get('is_superuser', False),
+                "is_verified": user_data.get('is_verified', False),
+                "avatar_url": user_data.get('avatar_url'),
+                "timezone": user_data.get('timezone', 'UTC'),
+                "locale": user_data.get('locale', 'en'),
+                "created_at": now,
+                "updated_at": now,
+            }
         )
         
         # Return the created user (without password)
@@ -280,26 +275,26 @@ class UserService(BaseService):
         
         # Build update query dynamically
         update_fields = []
-        params = []
-        
+        params = {}
+
         updateable_fields = [
             'first_name', 'last_name', 'full_name', 'avatar_url',
             'timezone', 'locale', 'is_active', 'is_verified'
         ]
-        
+
         for field in updateable_fields:
             if field in user_data:
-                update_fields.append(f"{field} = ?")
-                params.append(user_data[field])
-        
+                update_fields.append(f"{field} = :{field}")
+                params[field] = user_data[field]
+
         if update_fields:
-            update_fields.append("updated_at = ?")
-            params.append(datetime.now().isoformat())
-            params.append(user_id)
-            
-            query = f"UPDATE users SET {', '.join(update_fields)} WHERE id = ?"
-            await self._execute_query(query, tuple(params))
-        
+            update_fields.append("updated_at = :updated_at")
+            params["updated_at"] = datetime.now().isoformat()
+            params["user_id"] = user_id
+
+            query = f"UPDATE users SET {', '.join(update_fields)} WHERE id = :user_id"
+            await self._execute_query(query, params)
+
         return await self.get_user_by_id(user_id)
 
     async def update_user_password(self, user_id: int, hashed_password: str) -> None:
@@ -318,12 +313,12 @@ class UserService(BaseService):
         if not existing_user:
             raise NotFoundError(f"User with id {user_id} not found")
         
-        query = "UPDATE users SET hashed_password = ?, updated_at = ? WHERE id = ?"
-        await self._execute_query(query, (
-            hashed_password, 
-            datetime.now().isoformat(), 
-            user_id
-        ))
+        query = "UPDATE users SET hashed_password = :hashed_password, updated_at = :updated_at WHERE id = :user_id"
+        await self._execute_query(query, {
+            "hashed_password": hashed_password,
+            "updated_at": datetime.now().isoformat(),
+            "user_id": user_id,
+        })
 
     async def delete_user(self, user_id: int) -> bool:
         """
@@ -343,8 +338,8 @@ class UserService(BaseService):
         if not existing_user:
             raise NotFoundError(f"User with id {user_id} not found")
         
-        query = "UPDATE users SET is_active = 0, updated_at = ? WHERE id = ?"
-        await self._execute_query(query, (datetime.now().isoformat(), user_id))
+        query = "UPDATE users SET is_active = false, updated_at = :updated_at WHERE id = :user_id"
+        await self._execute_query(query, {"updated_at": datetime.now().isoformat(), "user_id": user_id})
         return True
 
     async def get_all_users(
@@ -368,16 +363,18 @@ class UserService(BaseService):
             SELECT id, email, is_active, is_superuser, is_verified,
                    first_name, last_name, full_name, avatar_url,
                    timezone, locale, created_at, updated_at
-            FROM users 
+            FROM users
         """
-        params = []
-        
+        params = {}
+
         if not include_inactive:
-            query += " WHERE is_active = 1"
-        
-        query += f" ORDER BY created_at DESC LIMIT {limit} OFFSET {offset}"
-        
-        return await self._fetch_all(query, tuple(params))
+            query += " WHERE is_active = true"
+
+        query += " ORDER BY created_at DESC LIMIT :limit OFFSET :offset"
+        params["limit"] = limit
+        params["offset"] = offset
+
+        return await self._fetch_all(query, params)
 
     async def search_users(self, search_term: str, limit: int = 20) -> List[Dict[str, Any]]:
         """
@@ -394,22 +391,23 @@ class UserService(BaseService):
             SELECT id, email, is_active, is_superuser, is_verified,
                    first_name, last_name, full_name, avatar_url,
                    timezone, locale, created_at, updated_at
-            FROM users 
-            WHERE is_active = 1 
+            FROM users
+            WHERE is_active = true
             AND (
-                email LIKE ? OR 
-                first_name LIKE ? OR 
-                last_name LIKE ? OR 
-                full_name LIKE ?
+                email LIKE :search_pattern OR
+                first_name LIKE :search_pattern OR
+                last_name LIKE :search_pattern OR
+                full_name LIKE :search_pattern
             )
             ORDER BY full_name
-            LIMIT ?
+            LIMIT :limit
         """
-        
+
         search_pattern = f"%{search_term}%"
-        return await self._fetch_all(query, (
-            search_pattern, search_pattern, search_pattern, search_pattern, limit
-        ))
+        return await self._fetch_all(query, {
+            "search_pattern": search_pattern,
+            "limit": limit,
+        })
 
     async def get_user_apps(self, user_id: int) -> List[Dict[str, Any]]:
         """
@@ -422,15 +420,15 @@ class UserService(BaseService):
             List of app records
         """
         query = """
-            SELECT DISTINCT a.app_id, a.app_slug, a.name, a.description, 
+            SELECT DISTINCT a.app_id, a.app_slug, a.name, a.description,
                    a.version, a.created_at, a.updated_at,
-                   CASE WHEN a.creator_user_id = ? THEN 'creator' ELSE 'installed' END as access_type
+                   CASE WHEN a.creator_user_id = :user_id THEN 'creator' ELSE 'installed' END as access_type
             FROM apps a
             LEFT JOIN app_installations ai ON a.app_id = ai.app_id
-            WHERE a.creator_user_id = ? OR (ai.installed_by_user_id = ? AND ai.is_active = 1)
+            WHERE a.creator_user_id = :user_id OR (ai.installed_by_user_id = :user_id AND ai.is_active = true)
             ORDER BY a.name
         """
-        return await self._fetch_all(query, (user_id, user_id, user_id))
+        return await self._fetch_all(query, {"user_id": user_id})
 
     async def get_user_apps_and_routes(self, user_id: int) -> List[Dict[str, Any]]:
         """
@@ -576,8 +574,8 @@ class UserService(BaseService):
         Returns:
             Updated user record
         """
-        query = "UPDATE users SET is_verified = 1, updated_at = ? WHERE id = ?"
-        await self._execute_query(query, (datetime.now().isoformat(), user_id))
+        query = "UPDATE users SET is_verified = 1, updated_at = :updated_at WHERE id = :user_id"
+        await self._execute_query(query, {"updated_at": datetime.now().isoformat(), "user_id": user_id})
         
         user = await self.get_user_by_id(user_id)
         if not user:
@@ -841,18 +839,25 @@ class UserService(BaseService):
             
             query = """
                 INSERT INTO organizations (
-                    uuid, name, display_name, slug, subscription_tier, 
+                    uuid, name, display_name, slug, subscription_tier,
                     is_active, created_by, created_at, updated_at
-                ) VALUES ($1, $2, $3, $4, 'free', 1, $5, $6, $7)
+                ) VALUES (:uuid, :name, :display_name, :slug, 'free', true, :created_by, :created_at, :updated_at)
                 RETURNING id
             """
-            
-            converted_query = self.query_adapter.convert_query(query)
+
             now = datetime.now().isoformat()
-            
+
             org_id = await self.db.fetch_val(
-                converted_query, 
-                org_uuid, org_name, org_name, org_slug, user_id, now, now
+                query,
+                {
+                    "uuid": org_uuid,
+                    "name": org_name,
+                    "display_name": org_name,
+                    "slug": org_slug,
+                    "created_by": user_id,
+                    "created_at": now,
+                    "updated_at": now,
+                }
             )
             
             if not org_id:
@@ -863,11 +868,15 @@ class UserService(BaseService):
             member_query = """
                 INSERT INTO organization_members (
                     organization_id, user_id, role, status, invited_by, joined_at
-                ) VALUES ($1, $2, 'owner', 'active', $3, $4)
+                ) VALUES (:organization_id, :user_id, 'owner', 'active', :invited_by, :joined_at)
             """
-            
-            converted_member_query = self.query_adapter.convert_query(member_query)
-            await self.db.execute(converted_member_query, org_id, user_id, user_id, now)
+
+            await self.db.execute(member_query, {
+                "organization_id": org_id,
+                "user_id": user_id,
+                "invited_by": user_id,
+                "joined_at": now,
+            })
             
             # No need to update users table - membership is tracked in organization_members
             
@@ -887,9 +896,8 @@ class UserService(BaseService):
         counter = 1
         original_slug = slug
         while True:
-            query = "SELECT id FROM organizations WHERE slug = $1"
-            converted_query = self.query_adapter.convert_query(query)
-            existing = await self.db.fetch_one(converted_query, slug)
+            query = "SELECT id FROM organizations WHERE slug = :slug"
+            existing = await self.db.fetch_one(query, {"slug": slug})
             if not existing:
                 break
             slug = f"{original_slug}-{counter}"

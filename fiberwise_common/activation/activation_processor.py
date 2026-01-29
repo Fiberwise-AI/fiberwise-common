@@ -17,9 +17,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, List, Union, Callable
 
-from fiberwise_common.database.base import DatabaseProvider
+from fiberwise_common.database.provider import DatabaseProvider
 from ..services.service_registry import ServiceRegistry
-from ..database.query_adapter import create_query_adapter
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +45,7 @@ class ActivationProcessor:
         """
         self.db = db_provider
         self.context = context
-        
-        provider_type = self._get_provider_type(db_provider)
-        self.query_adapter = create_query_adapter(provider_type)
+
         self._injected_services = {}
         self._notification_callback: Optional[Callable] = None
         
@@ -281,41 +278,37 @@ class ActivationProcessor:
         try:
             # First, try to get an existing active API key for this agent
             query = """
-                SELECT key_value FROM agent_api_keys 
-                WHERE app_id = $1 AND agent_id = $2 AND is_active = 1 AND is_revoked = 0
+                SELECT key_value FROM agent_api_keys
+                WHERE app_id = :app_id AND agent_id = :agent_id AND is_active = 1 AND is_revoked = 0
                 ORDER BY created_at DESC LIMIT 1
             """
-            
-            adapted_query, adapted_params = self.query_adapter.adapt_query_and_params(query, (app_id, agent_id))
-            result = await self.db.fetch_one(adapted_query, *adapted_params)
-            
+
+            result = await self.db.fetch_one(query, {"app_id": app_id, "agent_id": agent_id})
+
             if result:
                 logger.info(f"Using existing API key for agent {agent_id}")
                 return result['key_value']
-            
+
             # No existing key found, create a new one
             logger.info(f"Creating new API key for agent {agent_id}")
-            
+
             import secrets
-            
+
             # Generate a secure API key with agent_ prefix (compatible with auth middleware)
             api_key = f"agent_{secrets.token_urlsafe(32)}"
-            
+
             # Insert the new API key
             insert_query = """
                 INSERT INTO agent_api_keys (
-                    key_id, app_id, agent_id, organization_id, key_value, is_active, is_revoked, 
+                    key_id, app_id, agent_id, organization_id, key_value, is_active, is_revoked,
                     created_by, created_at, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, 1, 0, $6, NOW(), NOW())
+                ) VALUES (:key_id, :app_id, :agent_id, :organization_id, :api_key, 1, 0, :created_by, NOW(), NOW())
             """
-            
+
             import uuid
             key_id = str(uuid.uuid4())
-            
-            adapted_query, adapted_params = self.query_adapter.adapt_query_and_params(
-                insert_query, (key_id, app_id, agent_id, organization_id, api_key, created_by)
-            )
-            await self.db.execute(adapted_query, *adapted_params)
+
+            await self.db.execute(insert_query, {"key_id": key_id, "app_id": app_id, "agent_id": agent_id, "organization_id": organization_id, "api_key": api_key, "created_by": created_by})
             
             logger.info(f"Created new API key for agent {agent_id}: {api_key[:10]}...")
             return api_key
@@ -344,16 +337,13 @@ class ActivationProcessor:
                 INSERT INTO execution_api_keys (
                     key_id, app_id, organization_id, key_value, executor_type_id, executor_id,
                     created_by, expiration
-                ) VALUES ($1, $2, $3, $4, 'pipeline', $5, $6, $7)
+                ) VALUES (:key_id, :app_id, :organization_id, :key_value, 'pipeline', :pipeline_id, :created_by, :expiration)
             """
-            
+
             # Calculate expiration time (1 hour from now)
             from datetime import datetime, timedelta, timezone
             expiration_time = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
-            adapted_query, adapted_params = self.query_adapter.adapt_query_and_params(
-                insert_query, (key_id, app_id, organization_id, key_value, pipeline_id, created_by, expiration_time)
-            )
-            await self.db.execute(adapted_query, *adapted_params)
+            await self.db.execute(insert_query, {"key_id": key_id, "app_id": app_id, "organization_id": organization_id, "key_value": key_value, "pipeline_id": pipeline_id, "created_by": created_by, "expiration": expiration_time})
             
             logger.info(f"Created execution key for pipeline {pipeline_id}")
             return key_value
@@ -368,9 +358,8 @@ class ActivationProcessor:
         if not pipeline_id:
             raise ValueError("Missing pipeline_id in execution record")
         
-        pipeline_query = "SELECT app_id FROM pipelines WHERE pipeline_id = $1"
-        adapted_query, adapted_params = self.query_adapter.adapt_query_and_params(pipeline_query, (pipeline_id,))
-        pipeline_result = await self.db.fetch_one(adapted_query, *adapted_params)
+        pipeline_query = "SELECT app_id FROM pipelines WHERE pipeline_id = :pipeline_id"
+        pipeline_result = await self.db.fetch_one(pipeline_query, {"pipeline_id": pipeline_id})
         if not pipeline_result:
             raise ValueError(f"Pipeline {pipeline_id} not found in pipelines table")
         
@@ -416,9 +405,8 @@ class ActivationProcessor:
         if not agent_id:
             raise ValueError(f"Missing agent_id in activation record")
         
-        agent_query = "SELECT app_id FROM agents WHERE agent_id = $1"
-        adapted_query, adapted_params = self.query_adapter.adapt_query_and_params(agent_query, (agent_id,))
-        agent_result = await self.db.fetch_one(adapted_query, *adapted_params)
+        agent_query = "SELECT app_id FROM agents WHERE agent_id = :agent_id"
+        agent_result = await self.db.fetch_one(agent_query, {"agent_id": agent_id})
         if not agent_result:
             raise ValueError(f"Agent {agent_id} not found in agents table")
         
@@ -487,8 +475,7 @@ class ActivationProcessor:
                 ORDER BY priority DESC, created_at ASC
                 LIMIT 1
             """
-            adapted_query, adapted_params = self.query_adapter.adapt_query_and_params(agent_query)
-            agent_result = await self.db.fetch_one(adapted_query, *adapted_params)
+            agent_result = await self.db.fetch_one(agent_query)
 
             if agent_result:
                 work_item = dict(agent_result)
@@ -509,8 +496,7 @@ class ActivationProcessor:
                 ORDER BY priority DESC, created_at ASC
                 LIMIT 1
             """
-            adapted_query, adapted_params = self.query_adapter.adapt_query_and_params(pipeline_query)
-            pipeline_result = await self.db.fetch_one(adapted_query, *adapted_params)
+            pipeline_result = await self.db.fetch_one(pipeline_query)
 
             if pipeline_result:
                 work_item = dict(pipeline_result)
@@ -546,12 +532,11 @@ class ActivationProcessor:
                 ORDER BY created_at ASC
                 LIMIT 1
             """
-            adapted_query, adapted_params = self.query_adapter.adapt_query_and_params(query)
-            result = await self.db.fetch_one(adapted_query, *adapted_params)
-            
+            result = await self.db.fetch_one(query)
+
             if result:
                 activation = dict(result)
-                
+
                 # Parse JSON fields
                 for field in ['input_data', 'metadata', 'context', 'notes']:
                     if activation.get(field) and isinstance(activation[field], str):
@@ -559,11 +544,11 @@ class ActivationProcessor:
                             activation[field] = json.loads(activation[field])
                         except json.JSONDecodeError:
                             activation[field] = {}
-                
+
                 return activation
-            
+
             return None
-            
+
         except Exception as e:
             logger.error(f"Error getting next queued activation: {e}")
             return None
@@ -771,15 +756,14 @@ class ActivationProcessor:
         try:
             query = """
                 SELECT provider_id, name, provider_type, api_endpoint, configuration, is_active
-                FROM llm_providers 
-                WHERE provider_id = $1 AND is_active = 1
+                FROM llm_providers
+                WHERE provider_id = :provider_id AND is_active = 1
             """
-            adapted_query, adapted_params = self.query_adapter.adapt_query_and_params(query, (provider_id,))
-            result = await self.db.fetch_one(adapted_query, *adapted_params)
-            
+            result = await self.db.fetch_one(query, {"provider_id": provider_id})
+
             if not result:
                 return None
-            
+
             provider_config = dict(result)
             
             # Parse configuration from JSON string
@@ -1128,9 +1112,8 @@ class ActivationProcessor:
     
     async def _get_agent_details(self, agent_id: str) -> Optional[Dict[str, Any]]:
         """Get agent details from database."""
-        query = "SELECT * FROM agents WHERE agent_id = $1"
-        adapted_query, adapted_params = self.query_adapter.adapt_query_and_params(query, (agent_id,))
-        result = await self.db.fetch_one(adapted_query, *adapted_params)
+        query = "SELECT * FROM agents WHERE agent_id = :agent_id"
+        result = await self.db.fetch_one(query, {"agent_id": agent_id})
         
         if not result:
             return None
@@ -1157,30 +1140,27 @@ class ActivationProcessor:
             query = """
                 SELECT av.*
                 FROM agent_versions av
-                WHERE av.agent_id = $1 AND av.is_active = 1
-                ORDER BY av.created_at DESC 
+                WHERE av.agent_id = :agent_id AND av.is_active = 1
+                ORDER BY av.created_at DESC
                 LIMIT 1
             """
-            adapted_query, adapted_params = self.query_adapter.adapt_query_and_params(query, (agent_id,))
-            result = await self.db.fetch_one(adapted_query, *adapted_params)
+            result = await self.db.fetch_one(query, {"agent_id": agent_id})
         else:
             query = """
                 SELECT av.*
                 FROM agent_versions av
-                WHERE av.agent_id = $1 AND av.version = $2 AND av.is_active = 1
+                WHERE av.agent_id = :agent_id AND av.version = :version AND av.is_active = 1
             """
-            adapted_query, adapted_params = self.query_adapter.adapt_query_and_params(query, (agent_id, version))
-            result = await self.db.fetch_one(adapted_query, *adapted_params)
+            result = await self.db.fetch_one(query, {"agent_id": agent_id, "version": version})
         
         return dict(result) if result else None
     
     async def _get_activation(self, activation_id: str) -> Dict[str, Any]:
         """Get activation record from database."""
-        query = """SELECT activation_id, agent_id, agent_type_id, status, started_at, 
-                          completed_at, duration_ms, input_data, output_data, context, 
-                          metadata, created_by, created_at FROM agent_activations WHERE activation_id = $1"""
-        adapted_query, adapted_params = self.query_adapter.adapt_query_and_params(query, (activation_id,))
-        result = await self.db.fetch_one(adapted_query, *adapted_params)
+        query = """SELECT activation_id, agent_id, agent_type_id, status, started_at,
+                          completed_at, duration_ms, input_data, output_data, context,
+                          metadata, created_by, created_at FROM agent_activations WHERE activation_id = :activation_id"""
+        result = await self.db.fetch_one(query, {"activation_id": activation_id})
         
         if not result:
             return {}
@@ -1598,16 +1578,13 @@ class ActivationProcessor:
         try:
             # Query pipeline_code table to get step implementation
             query = """
-                SELECT step_id, step_class, implementation_code, language 
-                FROM pipeline_code 
-                WHERE pipeline_id = $1 AND step_class = $2 AND is_active = true
-                ORDER BY created_at DESC 
+                SELECT step_id, step_class, implementation_code, language
+                FROM pipeline_code
+                WHERE pipeline_id = :pipeline_id AND step_class = :step_class AND is_active = true
+                ORDER BY created_at DESC
                 LIMIT 1
             """
-            adapted_query, adapted_params = self.query_adapter.adapt_query_and_params(
-                query, (pipeline_id, step_class_name)
-            )
-            step_record = await self.db.fetch_one(adapted_query, *adapted_params)
+            step_record = await self.db.fetch_one(query, {"pipeline_id": pipeline_id, "step_class": step_class_name})
             
             if not step_record:
                 raise ValueError(f"Step class '{step_class_name}' not found in pipeline_code table for pipeline {pipeline_id}")
@@ -1811,17 +1788,14 @@ class ActivationProcessor:
         
         # Store the UI schema and step info in database for the web UI to retrieve
         update_query = """
-            UPDATE pipeline_executions 
-            SET status = 'paused_for_input', 
-                human_input_config = $1,
-                waiting_step_id = $2
-            WHERE execution_id = $3
+            UPDATE pipeline_executions
+            SET status = 'paused_for_input',
+                human_input_config = :human_input_config,
+                waiting_step_id = :waiting_step_id
+            WHERE execution_id = :execution_id
         """
-        
-        adapted_query, adapted_params = self.query_adapter.adapt_query_and_params(
-            update_query, (json.dumps(ui_schema), step_def.get('id'), execution_id)
-        )
-        await self.db.execute(adapted_query, *adapted_params)
+
+        await self.db.execute(update_query, {"human_input_config": json.dumps(ui_schema), "waiting_step_id": step_def.get('id'), "execution_id": execution_id})
         
         # Optionally send notification to user
         if self._notification_callback:
@@ -1835,9 +1809,8 @@ class ActivationProcessor:
     async def resume_pipeline_execution(self, execution_id: str, human_input_data: Dict[str, Any]) -> Dict[str, Any]:
         """Resume a paused pipeline with human input data."""
         # Get the execution record
-        execution_query = "SELECT * FROM pipeline_executions WHERE execution_id = $1"
-        adapted_query, adapted_params = self.query_adapter.adapt_query_and_params(execution_query, (execution_id,))
-        execution = await self.db.fetch_one(adapted_query, *adapted_params)
+        execution_query = "SELECT * FROM pipeline_executions WHERE execution_id = :execution_id"
+        execution = await self.db.fetch_one(execution_query, {"execution_id": execution_id})
         
         if not execution:
             raise ValueError(f"Execution {execution_id} not found")
@@ -1847,18 +1820,15 @@ class ActivationProcessor:
         
         # Update status and store human input
         update_query = """
-            UPDATE pipeline_executions 
+            UPDATE pipeline_executions
             SET status = 'running',
-                human_input_data = $1,
+                human_input_data = :human_input_data,
                 human_input_config = NULL,
                 waiting_step_id = NULL
-            WHERE execution_id = $2
+            WHERE execution_id = :execution_id
         """
-        
-        adapted_query, adapted_params = self.query_adapter.adapt_query_and_params(
-            update_query, (json.dumps(human_input_data), execution_id)
-        )
-        await self.db.execute(adapted_query, *adapted_params)
+
+        await self.db.execute(update_query, {"human_input_data": json.dumps(human_input_data), "execution_id": execution_id})
         
         # Continue pipeline execution from where it left off
         # This would typically be called by a web API endpoint
@@ -1911,9 +1881,8 @@ async def run(input_data):
     
     async def _get_pipeline_details(self, pipeline_id: str) -> Dict[str, Any]:
         """Get pipeline details from database."""
-        query = "SELECT * FROM pipelines WHERE pipeline_id = $1"
-        adapted_query, adapted_params = self.query_adapter.adapt_query_and_params(query, (pipeline_id,))
-        result = await self.db.fetch_one(adapted_query, *adapted_params)
+        query = "SELECT * FROM pipelines WHERE pipeline_id = :pipeline_id"
+        result = await self.db.fetch_one(query, {"pipeline_id": pipeline_id})
         
         if not result:
             return {}
@@ -1922,9 +1891,8 @@ async def run(input_data):
 
     async def _get_function_details(self, function_id: str) -> Dict[str, Any]:
         """Get function details from database."""
-        query = "SELECT * FROM functions WHERE function_id = $1"
-        adapted_query, adapted_params = self.query_adapter.adapt_query_and_params(query, (function_id,))
-        result = await self.db.fetch_one(adapted_query, *adapted_params)
+        query = "SELECT * FROM functions WHERE function_id = :function_id"
+        result = await self.db.fetch_one(query, {"function_id": function_id})
         
         if not result:
             return {}
@@ -1941,72 +1909,64 @@ async def run(input_data):
         
         return function
     
-    async def _update_pipeline_execution_status(self, execution_id: str, status: str, 
+    async def _update_pipeline_execution_status(self, execution_id: str, status: str,
                                               output_data: Dict[str, Any] = None,
                                               execution_time_ms: int = None,
                                               error: str = None):
         """Update pipeline execution status in database."""
-        update_fields = ["status = $2"]
-        values = [execution_id, status]
-        param_index = 3
-        
+        update_fields = ["status = :status"]
+        params = {"execution_id": execution_id, "status": status}
+
         if status in ['completed', 'failed']:
             update_fields.append("completed_at = CURRENT_TIMESTAMP")
-        
+
         if output_data is not None:
-            update_fields.append(f"results = ${param_index}") # pipelines table uses 'results'
-            values.append(json.dumps(output_data))
-            param_index += 1
-            
+            update_fields.append("results = :results") # pipelines table uses 'results'
+            params["results"] = json.dumps(output_data)
+
         if error is not None:
-            update_fields.append(f"error = ${param_index}")
-            values.append(error)
-            param_index += 1
-        
+            update_fields.append("error = :error")
+            params["error"] = error
+
         query = f"""
-            UPDATE pipeline_executions 
+            UPDATE pipeline_executions
             SET {', '.join(update_fields)}
-            WHERE execution_id = $1
+            WHERE execution_id = :execution_id
         """
-        
+
         try:
-            adapted_query, adapted_params = self.query_adapter.adapt_query_and_params(query, values)
-            await self.db.execute(adapted_query, *adapted_params)
+            await self.db.execute(query, params)
             logger.debug(f"[{self.context}] Updated pipeline execution {execution_id} status to {status}")
         except Exception as e:
             logger.error(f"[{self.context}] Failed to update pipeline execution status: {str(e)}")
 
-    async def _update_function_execution_status(self, execution_id: str, status: str, 
+    async def _update_function_execution_status(self, execution_id: str, status: str,
                                               output_data: Dict[str, Any] = None,
                                               execution_time_ms: int = None,
                                               error: str = None):
         """Update function execution status in database."""
-        update_fields = ["status = $2"]
-        values = [execution_id, status]
-        param_index = 3
-        
+        update_fields = ["status = :status"]
+        params = {"execution_id": execution_id, "status": status}
+
         if status in ['completed', 'failed']:
             update_fields.append("completed_at = CURRENT_TIMESTAMP")
-        
+
         if output_data is not None:
-            update_fields.append(f"output_data = ${param_index}")
-            values.append(json.dumps(output_data))
-            param_index += 1
-            
+            update_fields.append("output_data = :output_data")
+            params["output_data"] = json.dumps(output_data)
+
         if error is not None:
-            update_fields.append(f"error = ${param_index}")
-            values.append(error)
-            param_index += 1
-        
+            update_fields.append("error = :error")
+            params["error"] = error
+
         query = f"""
-            UPDATE function_executions 
+            UPDATE function_executions
             SET {', '.join(update_fields)}
-            WHERE execution_id = $1
+            WHERE execution_id = :execution_id
         """
-        
+
         try:
-            adapted_query, adapted_params = self.query_adapter.adapt_query_and_params(query, values)
-            await self.db.execute(adapted_query, *adapted_params)
+            await self.db.execute(query, params)
             logger.debug(f"[{self.context}] Updated function execution {execution_id} status to {status}")
         except Exception as e:
             logger.error(f"[{self.context}] Failed to update function execution status: {str(e)}")
@@ -2043,51 +2003,45 @@ async def run(input_data):
         """
         try:
             # Build update query dynamically
-            set_clauses = ["status = $1", "updated_at = NOW()"]
-            values = [status]
-            param_index = 2
-            
+            set_clauses = ["status = :status", "updated_at = NOW()"]
+            params = {"status": status, "activation_id": activation_id}
+
             if output_data is not None:
-                set_clauses.append(f"output_data = ${param_index}")
-                values.append(json.dumps(output_data))
-                param_index += 1
-            
+                set_clauses.append("output_data = :output_data")
+                params["output_data"] = json.dumps(output_data)
+
             if error is not None:
-                set_clauses.append(f"error = ${param_index}")
-                values.append(error)
-                param_index += 1
-            
+                set_clauses.append("error = :error")
+                params["error"] = error
+
             if execution_time_ms is not None:
-                set_clauses.append(f"duration_ms = ${param_index}")
-                values.append(execution_time_ms)
-                param_index += 1
-            
+                set_clauses.append("duration_ms = :duration_ms")
+                params["duration_ms"] = execution_time_ms
+
             if status in ('completed', 'failed'):
                 set_clauses.append("completed_at = NOW()")
             elif status == 'running':
                 set_clauses.append("started_at = NOW()")
-            
+
             query = f"""
-                UPDATE agent_activations 
+                UPDATE agent_activations
                 SET {', '.join(set_clauses)}
-                WHERE activation_id = ${param_index}
+                WHERE activation_id = :activation_id
             """
-            values.append(activation_id)
-            
-            adapted_query, adapted_params = self.query_adapter.adapt_query_and_params(query, values)
-            await self.db.execute(adapted_query, *adapted_params)
-            
+
+            await self.db.execute(query, params)
+
             # Send notification if callback is set and activation is completed
             if self._notification_callback and status in ('completed', 'failed'):
                 try:
                     logger.info(f"[{self.context}] 🔔 NOTIFICATION CALLBACK TRIGGERED on PROCESSOR [{self.instance_id}]! activation_id={activation_id}, status={status}")
-                    
+
                     # Get activation details to find app_id
                     activation = await self._get_activation(activation_id)
-                    
+
                     logger.info(f"[{self.context}] 📋 Activation metadata: {activation.get('metadata', {})}")
                     logger.info(f"[{self.context}] 📋 Activation context: {activation.get('context', {})}")
-                    
+
                     # Use centralized method to get app_id
                     try:
                         app_id = await self._extract_app_id_from_activation(activation)
@@ -2095,9 +2049,9 @@ async def run(input_data):
                     except Exception as e:
                         logger.error(f"[{self.context}] ❌ Failed to extract app_id: {e}")
                         app_id = None
-                    
+
                     logger.info(f"[{self.context}] 🎯 Final extracted app_id: {app_id}")
-                    
+
                     if app_id:
                         # Call notification callback
                         logger.info(f"[{self.context}] 📞 CALLING NOTIFICATION CALLBACK for app_id: {app_id}")
@@ -2105,93 +2059,16 @@ async def run(input_data):
                         logger.info(f"[{self.context}] ✅ NOTIFICATION CALLBACK COMPLETED")
                     else:
                         logger.warning(f"[{self.context}] ❌ No app_id found in activation metadata/context, skipping notification")
-                        
+
                 except Exception as e:
                     logger.error(f"[{self.context}] 💥 Error calling notification callback: {str(e)}", exc_info=True)
             elif not self._notification_callback:
                 logger.warning(f"[{self.context}] ⚠️ No notification callback set on PROCESSOR [{self.instance_id}] - WebSocket broadcasting not configured!")
             else:
                 logger.debug(f"[{self.context}] Status {status} doesn't trigger notifications (only 'completed' and 'failed' do)")
-            
+
             return True
-            
-        except Exception as e:
-            logger.error(f"[{self.context}] Error updating activation {activation_id}: {str(e)}")
-            return False
-        try:
-            # Build update query dynamically
-            set_clauses = ["status = $1", "updated_at = NOW()"]
-            values = [status]
-            param_index = 2
-            
-            if output_data is not None:
-                set_clauses.append(f"output_data = ${param_index}")
-                values.append(json.dumps(output_data))
-                param_index += 1
-            
-            if error is not None:
-                set_clauses.append(f"error = ${param_index}")
-                values.append(error)
-                param_index += 1
-            
-            if execution_time_ms is not None:
-                set_clauses.append(f"duration_ms = ${param_index}")
-                values.append(execution_time_ms)
-                param_index += 1
-            
-            if status in ('completed', 'failed'):
-                set_clauses.append("completed_at = NOW()")
-            elif status == 'running':
-                set_clauses.append("started_at = NOW()")
-            
-            query = f"""
-                UPDATE agent_activations 
-                SET {', '.join(set_clauses)}
-                WHERE activation_id = ${param_index}
-            """
-            values.append(activation_id)
-            
-            adapted_query, adapted_params = self.query_adapter.adapt_query_and_params(query, values)
-            await self.db.execute(adapted_query, *adapted_params)
-            
-            # Send notification if callback is set and activation is completed
-            if self._notification_callback and status in ('completed', 'failed'):
-                try:
-                    logger.info(f"[{self.context}] 🔔 NOTIFICATION CALLBACK TRIGGERED on PROCESSOR [{self.instance_id}]! activation_id={activation_id}, status={status}")
-                    
-                    # Get activation details to find app_id
-                    activation = await self._get_activation(activation_id)
-                    
-                    logger.info(f"[{self.context}] 📋 Activation metadata: {activation.get('metadata', {})}")
-                    logger.info(f"[{self.context}] 📋 Activation context: {activation.get('context', {})}")
-                    
-                    # Use centralized method to get app_id
-                    try:
-                        app_id = await self._extract_app_id_from_activation(activation)
-                        logger.info(f"[{self.context}] ✅ Found app_id: {app_id}")
-                    except Exception as e:
-                        logger.error(f"[{self.context}] ❌ Failed to extract app_id: {e}")
-                        app_id = None
-                    
-                    logger.info(f"[{self.context}] 🎯 Final extracted app_id: {app_id}")
-                    
-                    if app_id:
-                        # Call notification callback
-                        logger.info(f"[{self.context}] 📞 CALLING NOTIFICATION CALLBACK for app_id: {app_id}")
-                        await self._notification_callback(activation_id, status, app_id)
-                        logger.info(f"[{self.context}] ✅ NOTIFICATION CALLBACK COMPLETED")
-                    else:
-                        logger.warning(f"[{self.context}] ❌ No app_id found in activation metadata/context, skipping notification")
-                        
-                except Exception as e:
-                    logger.error(f"[{self.context}] 💥 Error calling notification callback: {str(e)}", exc_info=True)
-            elif not self._notification_callback:
-                logger.warning(f"[{self.context}] ⚠️ No notification callback set on PROCESSOR [{self.instance_id}] - WebSocket broadcasting not configured!")
-            else:
-                logger.debug(f"[{self.context}] Status {status} doesn't trigger notifications (only 'completed' and 'failed' do)")
-            
-            return True
-            
+
         except Exception as e:
             logger.error(f"[{self.context}] Error updating activation {activation_id}: {str(e)}")
             return False

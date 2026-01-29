@@ -1,33 +1,23 @@
-from ..config import BaseWebSettings
-from .base import DatabaseProvider
-from .postgres import PostgresProvider
-from .duckdb import DuckDBProvider
-from .sqlite import SQLiteProvider
+"""
+Database provider factory - backward compatibility shim.
 
-def get_database_provider(settings_instance: BaseWebSettings = None) -> DatabaseProvider:
+Uses NexusQL under the hood. The DATABASE_URL determines the database type
+automatically (no need for a separate DB_PROVIDER setting).
+"""
+
+from .provider import DatabaseProvider, create_database_provider
+
+
+def get_database_provider(settings_instance=None) -> DatabaseProvider:
     """
     Factory function to get the configured database provider.
+
+    With NexusQL, the database type is determined from the DATABASE_URL.
     """
     if settings_instance is None:
         raise ValueError("Settings instance is required")
-        
-    provider_name = settings_instance.DB_PROVIDER.lower()
-    if provider_name == "postgres":
-        return PostgresProvider()
-    elif provider_name == "duckdb":
-        return DuckDBProvider()
-    elif provider_name == "sqlite":
-        provider = SQLiteProvider()
-        # Set the database path from settings
-        print(f"[DEBUG] Settings instance: {settings_instance}")
-        print(f"[DEBUG] Has DATABASE_URL: {hasattr(settings_instance, 'DATABASE_URL')}")
-        if hasattr(settings_instance, 'DATABASE_URL'):
-            print(f"[DEBUG] DATABASE_URL: {settings_instance.DATABASE_URL}")
-            
-        if hasattr(settings_instance, 'DATABASE_URL') and settings_instance.DATABASE_URL.startswith('sqlite:///'):
-            db_path = settings_instance.DATABASE_URL.replace('sqlite:///', '')
-            print(f"[DEBUG] Setting database path: {db_path}")
-            provider.set_db_path(db_path)
-        return provider
-    else:
-        raise ValueError(f"Unsupported database provider: {provider_name}")
+
+    if not hasattr(settings_instance, 'DATABASE_URL'):
+        raise ValueError("Settings must have DATABASE_URL attribute")
+
+    return create_database_provider(settings_instance.DATABASE_URL)

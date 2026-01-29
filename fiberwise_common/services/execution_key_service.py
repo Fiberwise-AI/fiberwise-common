@@ -10,8 +10,6 @@ import secrets
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, List
 
-from ..database.query_adapter import create_query_adapter, ParameterStyle
-
 logger = logging.getLogger(__name__)
 
 class ExecutionKeyService:
@@ -20,18 +18,11 @@ class ExecutionKeyService:
     def __init__(self, db_connection):
         """
         Initialize the ExecutionKeyService
-        
+
         Args:
             db_connection: Database connection object
         """
         self.db = db_connection
-        
-        # Create query adapter based on database provider type
-        db_type = getattr(db_connection, 'provider_type', 'sqlite')
-        if hasattr(db_connection, 'provider') and hasattr(db_connection.provider, 'provider_type'):
-            db_type = db_connection.provider.provider_type
-        
-        self.query_adapter = create_query_adapter(db_type)
     
     async def create_execution_key(
         self,
@@ -81,32 +72,27 @@ class ExecutionKeyService:
                     key_id, key_value, app_id, organization_id, executor_type_id, executor_id,
                     created_by, scopes, expiration, resource_pattern, metadata
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                VALUES (:key_id, :key_value, :app_id, :organization_id, :executor_type_id, :executor_id,
+                    :created_by, :scopes, :expiration, :resource_pattern, :metadata)
             """
-            
-            # Convert query and parameters for target database
-            converted_query, converted_params = self.query_adapter.adapt_query_and_params(
-                query, 
-                (key_id, key_value, app_id, organization_id, executor_type_id, executor_id,
-                 created_by, scopes_json, expiration_str, resource_pattern, metadata_json),
-                ParameterStyle.POSTGRESQL
-            )
-            
+
+            params = {"key_id": key_id, "key_value": key_value, "app_id": app_id,
+                      "organization_id": organization_id, "executor_type_id": executor_type_id,
+                      "executor_id": executor_id, "created_by": created_by, "scopes": scopes_json,
+                      "expiration": expiration_str, "resource_pattern": resource_pattern,
+                      "metadata": metadata_json}
+
             logger.info(f"Executing insert query with key_id: {key_id}")
-            logger.info(f"Converted query: {converted_query}")
-            
+
             # Execute the insert
-            insert_result = await self.db.execute(converted_query, *converted_params)
+            insert_result = await self.db.execute(query, params)
             logger.info(f"Insert result: {insert_result}")
             
             # Fetch the created record
-            fetch_query = "SELECT key_id, key_value, expiration FROM execution_api_keys WHERE key_id = $1"
-            converted_fetch_query, converted_fetch_params = self.query_adapter.adapt_query_and_params(
-                fetch_query, (key_id,), ParameterStyle.POSTGRESQL
-            )
-            
-            logger.info(f"Fetching created record with query: {converted_fetch_query}")
-            result = await self.db.fetch_one(converted_fetch_query, *converted_fetch_params)
+            fetch_query = "SELECT key_id, key_value, expiration FROM execution_api_keys WHERE key_id = :key_id"
+
+            logger.info(f"Fetching created record with query: {fetch_query}")
+            result = await self.db.fetch_one(fetch_query, {"key_id": key_id})
             logger.info(f"Fetch result: {result}")
             
             if result:
@@ -155,21 +141,16 @@ class ExecutionKeyService:
         """
         try:
             query = """
-                SELECT 
+                SELECT
                     key_id, app_id, organization_id, executor_type_id, executor_id,
                     created_by, scopes, expiration, resource_pattern,
                     metadata, created_at
                 FROM execution_api_keys
-                WHERE key_value = $1 
+                WHERE key_value = :key_value
                     AND is_revoked = 0
             """
-            
-            # Convert query and parameters for target database
-            converted_query, converted_params = self.query_adapter.adapt_query_and_params(
-                query, (key_value,), ParameterStyle.POSTGRESQL
-            )
-            
-            result = await self.db.fetch_one(converted_query, *converted_params)
+
+            result = await self.db.fetch_one(query, {"key_value": key_value})
             
             if not result:
                 logger.warning(f"Execution API key not found or revoked")
@@ -252,22 +233,14 @@ class ExecutionKeyService:
             query = """
                 UPDATE execution_api_keys
                 SET is_revoked = 1, updated_at = CURRENT_TIMESTAMP
-                WHERE key_id = $1
+                WHERE key_id = :key_id
             """
-            
-            # Convert query and parameters for target database
-            converted_query, converted_params = self.query_adapter.adapt_query_and_params(
-                query, (key_id,), ParameterStyle.POSTGRESQL
-            )
-            
-            await self.db.execute(converted_query, *converted_params)
-            
+
+            await self.db.execute(query, {"key_id": key_id})
+
             # Check if the update was successful by fetching the record
-            check_query = "SELECT key_id FROM execution_api_keys WHERE key_id = $1 AND is_revoked = 1"
-            converted_check_query, converted_check_params = self.query_adapter.adapt_query_and_params(
-                check_query, (key_id,), ParameterStyle.POSTGRESQL
-            )
-            result = await self.db.fetch_one(converted_check_query, *converted_check_params)
+            check_query = "SELECT key_id FROM execution_api_keys WHERE key_id = :key_id AND is_revoked = 1"
+            result = await self.db.fetch_one(check_query, {"key_id": key_id})
             
             success = result is not None
             if success:
@@ -289,27 +262,22 @@ class ExecutionKeyService:
         """
         try:
             now = datetime.now(timezone.utc).isoformat()
-            
+
             query = """
                 UPDATE execution_api_keys
                 SET is_revoked = 1, updated_at = CURRENT_TIMESTAMP
-                WHERE expiration < $1 AND is_revoked = 0
+                WHERE expiration < :now AND is_revoked = 0
             """
-            
-            # Convert query and parameters for target database
-            converted_query, converted_params = self.query_adapter.adapt_query_and_params(
-                query, (now,), ParameterStyle.POSTGRESQL
-            )
-            
-            await self.db.execute(converted_query, *converted_params)
-            
+
+            await self.db.execute(query, {"now": now})
+
             # Count how many were updated
-            count_query = "SELECT COUNT(*) FROM execution_api_keys WHERE expiration < $1 AND is_revoked = 1"
-            converted_count_query, converted_count_params = self.query_adapter.adapt_query_and_params(
-                count_query, (now,), ParameterStyle.POSTGRESQL
-            )
-            count_result = await self.db.fetch_one(converted_count_query, *converted_count_params)
-            count = count_result[0] if count_result else 0
+            count_query = "SELECT COUNT(*) FROM execution_api_keys WHERE expiration < :now AND is_revoked = 1"
+            count_result = await self.db.fetch_one(count_query, {"now": now})
+            if count_result:
+                count = count_result[0] if isinstance(count_result, (list, tuple)) else list(count_result.values())[0]
+            else:
+                count = 0
             
             if count > 0:
                 logger.info(f"Cleaned up {count} expired execution API keys")
@@ -342,36 +310,31 @@ class ExecutionKeyService:
         """
         try:
             conditions = []
-            params = []
-            param_num = 1
-            
+            params = {}
+
             if app_id:
-                conditions.append(f"app_id = ${param_num}")
-                params.append(app_id)
-                param_num += 1
-            
+                conditions.append("app_id = :app_id")
+                params["app_id"] = app_id
+
             if executor_type_id:
-                conditions.append(f"executor_type_id = ${param_num}")
-                params.append(executor_type_id)
-                param_num += 1
-            
+                conditions.append("executor_type_id = :executor_type_id")
+                params["executor_type_id"] = executor_type_id
+
             if executor_id:
-                conditions.append(f"executor_id = ${param_num}")
-                params.append(executor_id)
-                param_num += 1
-            
+                conditions.append("executor_id = :executor_id")
+                params["executor_id"] = executor_id
+
             if created_by:
-                conditions.append(f"created_by = ${param_num}")
-                params.append(created_by)
-                param_num += 1
-            
+                conditions.append("created_by = :created_by")
+                params["created_by"] = created_by
+
             if not include_revoked:
                 conditions.append("is_revoked = 0")
-            
+
             where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
-            
+
             query = f"""
-                SELECT 
+                SELECT
                     key_id, app_id, organization_id, executor_type_id, executor_id,
                     created_by, scopes, expiration, resource_pattern,
                     metadata, is_revoked, created_at, updated_at
@@ -379,13 +342,8 @@ class ExecutionKeyService:
                 {where_clause}
                 ORDER BY created_at DESC
             """
-            
-            # Convert query and parameters for target database
-            converted_query, converted_params = self.query_adapter.adapt_query_and_params(
-                query, tuple(params), ParameterStyle.POSTGRESQL
-            )
-            
-            results = await self.db.fetch_all(converted_query, *converted_params)
+
+            results = await self.db.fetch_all(query, params)
             
             keys = []
             for result in results:

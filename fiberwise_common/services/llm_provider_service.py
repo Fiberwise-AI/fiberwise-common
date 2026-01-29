@@ -36,21 +36,21 @@ class LLMProviderService(BaseService):
             # Query with user scoping - show system providers and user's own providers
             if self.user_id:
                 query = """
-                    SELECT provider_id, name, provider_type, api_endpoint, configuration 
+                    SELECT provider_id, name, provider_type, api_endpoint, configuration
                     FROM llm_providers
-                    WHERE provider_id = $1 AND (is_active = 1 OR is_active = true OR is_active = 'true') 
-                    AND (is_system = true OR is_system = 1 OR created_by = $2)
+                    WHERE provider_id = :provider_id AND is_active = true
+                    AND (is_system = true OR created_by = :user_id)
                 """
-                provider = await self._fetch_one(query, (provider_id, self.user_id))
+                provider = await self._fetch_one(query, {"provider_id": provider_id, "user_id": self.user_id})
             else:
                 # No user scoping - only show system providers
                 query = """
-                    SELECT provider_id, name, provider_type, api_endpoint, configuration 
+                    SELECT provider_id, name, provider_type, api_endpoint, configuration
                     FROM llm_providers
-                    WHERE provider_id = $1 AND (is_active = 1 OR is_active = true OR is_active = 'true') 
-                    AND (is_system = true OR is_system = 1)
+                    WHERE provider_id = :provider_id AND is_active = true
+                    AND is_system = true
                 """
-                provider = await self._fetch_one(query, (provider_id,))
+                provider = await self._fetch_one(query, {"provider_id": provider_id})
             
             if not provider:
                 logger.warning(f"Provider {provider_id} not found or not active")
@@ -89,17 +89,17 @@ class LLMProviderService(BaseService):
         """
         if self.user_id:
             # User's explicit default
-            query = """SELECT * FROM llm_providers 
-                      WHERE (is_active = 1 OR is_active = true OR is_active = 'true') 
-                      AND (is_default = 1 OR is_default = true OR is_default = 'true') 
-                      AND created_by = $1"""
-            provider = await self._fetch_one(query, (self.user_id,))
+            query = """SELECT * FROM llm_providers
+                      WHERE is_active = true
+                      AND is_default = true
+                      AND created_by = :user_id"""
+            provider = await self._fetch_one(query, {"user_id": self.user_id})
         else:
             # System default
             query = """SELECT * FROM llm_providers 
-                      WHERE (is_active = 1 OR is_active = true OR is_active = 'true') 
-                      AND (is_default = 1 OR is_default = true OR is_default = 'true') 
-                      AND (is_system = 1 OR is_system = true OR is_system = 'true')"""
+                      WHERE is_active = true 
+                      AND is_default = true 
+                      AND is_system = true"""
             provider = await self._fetch_one(query)
 
         if provider:

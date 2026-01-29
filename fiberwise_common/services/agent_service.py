@@ -10,7 +10,6 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional
 
 from .base_service import BaseService, ServiceError, NotFoundError, ValidationError
-from ..database.query_adapter import QueryAdapter, ParameterStyle
 
 logger = logging.getLogger(__name__)
 
@@ -24,13 +23,11 @@ class AgentService(BaseService):
     def __init__(self, db_provider):
         """
         Initialize with a database provider.
-        
+
         Args:
             db_provider: Database provider (SQLiteProvider, PostgreSQLProvider, etc.)
         """
         super().__init__(db_provider)
-        # Initialize query adapter for SQLite (since we're using SQLite)
-        self.query_adapter = QueryAdapter(ParameterStyle.SQLITE)
 
     async def get_agents(
         self,
@@ -1088,27 +1085,30 @@ class AgentService(BaseService):
                 config, entrypoint_file, class_name, language, is_active,
                 is_system, created_by, created_at, updated_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            VALUES (:agent_id, :app_id, :name, :description, :version, :capabilities,
+                    :config, :entrypoint_file, :class_name, :language, :is_active,
+                    :is_system, :created_by, :created_at, :updated_at)
         """
-        
-        converted_query = self.query_adapter.convert_query(query)
+
         await self.db.execute(
-            converted_query,
-            agent_data['agent_id'],
-            agent_data['app_id'],
-            agent_data['name'],
-            agent_data.get('description'),
-            agent_data.get('version', '1.0.0'),
-            json.dumps(agent_data.get('capabilities', {})),
-            json.dumps(agent_data.get('config', {})),
-            agent_data.get('entrypoint_file'),
-            agent_data.get('class_name'),
-            agent_data.get('language', 'python'),
-            agent_data.get('is_active', True),
-            agent_data.get('is_system', False),
-            agent_data.get('created_by'),
-            now,
-            now
+            query,
+            {
+                "agent_id": agent_data['agent_id'],
+                "app_id": agent_data['app_id'],
+                "name": agent_data['name'],
+                "description": agent_data.get('description'),
+                "version": agent_data.get('version', '1.0.0'),
+                "capabilities": json.dumps(agent_data.get('capabilities', {})),
+                "config": json.dumps(agent_data.get('config', {})),
+                "entrypoint_file": agent_data.get('entrypoint_file'),
+                "class_name": agent_data.get('class_name'),
+                "language": agent_data.get('language', 'python'),
+                "is_active": agent_data.get('is_active', True),
+                "is_system": agent_data.get('is_system', False),
+                "created_by": agent_data.get('created_by'),
+                "created_at": now,
+                "updated_at": now,
+            }
         )
         
         # Return the created agent
@@ -1139,30 +1139,29 @@ class AgentService(BaseService):
         
         # Build update query dynamically
         update_fields = []
-        params = []
-        
+        params = {}
+
         updateable_fields = [
             'name', 'description', 'version', 'capabilities', 'config',
             'entrypoint_file', 'class_name', 'language', 'is_active'
         ]
-        
+
         for field in updateable_fields:
             if field in agent_data:
                 if field in ['capabilities', 'config']:
-                    update_fields.append(f"{field} = $1")
-                    params.append(json.dumps(agent_data[field]))
+                    update_fields.append(f"{field} = :{field}")
+                    params[field] = json.dumps(agent_data[field])
                 else:
-                    update_fields.append(f"{field} = $1")
-                    params.append(agent_data[field])
-        
+                    update_fields.append(f"{field} = :{field}")
+                    params[field] = agent_data[field]
+
         if update_fields:
-            update_fields.append("updated_at = $1")
-            params.append(datetime.now().isoformat())
-            params.append(agent_id)
-            
-            query = f"UPDATE agents SET {', '.join(update_fields)} WHERE agent_id = $1"
-            converted_query = self.query_adapter.convert_query(query)
-            await self.db.execute(converted_query, *params)
+            update_fields.append("updated_at = :updated_at")
+            params["updated_at"] = datetime.now().isoformat()
+            params["agent_id"] = agent_id
+
+            query = f"UPDATE agents SET {', '.join(update_fields)} WHERE agent_id = :agent_id"
+            await self.db.execute(query, params)
         
         return await self.get_agent_by_id(agent_id)
 
@@ -1184,9 +1183,8 @@ class AgentService(BaseService):
         if not existing_agent:
             raise NotFoundError(f"Agent with id {agent_id} not found")
         
-        query = "UPDATE agents SET is_active = $1, updated_at = $2 WHERE agent_id = $3"
-        converted_query = self.query_adapter.convert_query(query)
-        await self.db.execute(converted_query, False, datetime.now().isoformat(), agent_id)
+        query = "UPDATE agents SET is_active = :is_active, updated_at = :updated_at WHERE agent_id = :agent_id"
+        await self.db.execute(query, {"is_active": False, "updated_at": datetime.now().isoformat(), "agent_id": agent_id})
         return True
 
     async def get_agents_by_app(self, app_id: str) -> List[Dict[str, Any]]:
@@ -1203,19 +1201,18 @@ class AgentService(BaseService):
             SELECT agent_id, app_id, name, description, agent_type_id, config,
                    agent_code, is_active, is_enabled, created_by, created_at, updated_at,
                    checksum, input_schema, output_schema, dependencies
-            FROM agents 
-            WHERE app_id = $1 AND is_active = $2
+            FROM agents
+            WHERE app_id = :app_id AND is_active = :is_active
             ORDER BY name
         """
-        
-        converted_query = self.query_adapter.convert_query(query)
-        agents = await self.db.fetch_all(converted_query, app_id, True)
-        
+
+        agents = await self.db.fetch_all(query, {"app_id": app_id, "is_active": True})
+
         # Process results to parse JSON fields
         result = []
         for agent in agents:
             agent_dict = dict(agent)
-            
+
             # Parse JSON fields
             for field in ['config', 'input_schema', 'output_schema']:
                 if agent_dict.get(field):
@@ -1224,9 +1221,9 @@ class AgentService(BaseService):
                             agent_dict[field] = json.loads(agent_dict[field])
                     except (json.JSONDecodeError, TypeError):
                         agent_dict[field] = {}
-            
+
             result.append(agent_dict)
-        
+
         return result
 
     async def search_agents(self, search_term: str, limit: int = 20) -> List[Dict[str, Any]]:
@@ -1244,19 +1241,18 @@ class AgentService(BaseService):
             SELECT agent_id, app_id, name, description, version, capabilities,
                    config, entrypoint_file, class_name, language, is_active,
                    is_system, created_by, created_at, updated_at
-            FROM agents 
-            WHERE is_active = $1 
+            FROM agents
+            WHERE is_active = :is_active
             AND (
-                name LIKE $2 OR 
-                description LIKE $2
+                name LIKE :search_pattern OR
+                description LIKE :search_pattern
             )
             ORDER BY name
-            LIMIT $3
+            LIMIT :limit
         """
-        
-        converted_query = self.query_adapter.convert_query(query)
+
         search_pattern = f"%{search_term}%"
-        agents = await self.db.fetch_all(converted_query, True, search_pattern, limit)
+        agents = await self.db.fetch_all(query, {"is_active": True, "search_pattern": search_pattern, "limit": limit})
         
         # Process results to parse JSON fields
         result = []

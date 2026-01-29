@@ -1,6 +1,5 @@
 """
 Fiberwise-common specific test fixtures and configuration.
-Extends the root conftest.py with package-specific fixtures.
 """
 import os
 import tempfile
@@ -9,9 +8,7 @@ from pathlib import Path
 from typing import Generator, Dict, Any
 from unittest.mock import Mock, AsyncMock
 
-# Import fiberwise-common specific dependencies
-from fiberwise_common.database.providers import SQLiteProvider, DuckDBProvider
-from fiberwise_common.database.base import DatabaseProvider
+from fiberwise_common.database.provider import NexusQLProvider, DatabaseProvider
 
 
 @pytest.fixture(scope="session")
@@ -59,7 +56,7 @@ def sample_manifest_data() -> Dict[str, Any]:
         ],
         "functions": [
             {
-                "name": "test_function", 
+                "name": "test_function",
                 "file": "functions/test_function.py",
                 "description": "A test function"
             }
@@ -70,28 +67,31 @@ def sample_manifest_data() -> Dict[str, Any]:
 @pytest.fixture
 def mock_database_provider() -> Mock:
     """Mock database provider for testing."""
-    mock_db = Mock(spec=DatabaseProvider)
-    mock_db.connect = AsyncMock()
+    mock_db = Mock(spec=NexusQLProvider)
+    mock_db.connect = AsyncMock(return_value=True)
     mock_db.disconnect = AsyncMock()
     mock_db.execute = AsyncMock()
     mock_db.fetch_all = AsyncMock(return_value=[])
     mock_db.fetch_one = AsyncMock(return_value=None)
+    mock_db.fetch_val = AsyncMock(return_value=None)
     mock_db.execute_many = AsyncMock()
+    mock_db.execute_script = AsyncMock()
+    mock_db.is_healthy = AsyncMock(return_value=True)
+    mock_db.table_exists = Mock(return_value=False)
+    mock_db.database_url = "sqlite:///test.db"
     return mock_db
 
 
-@pytest.fixture 
-def sqlite_provider(temp_dir: Path) -> SQLiteProvider:
-    """SQLite database provider for testing."""
-    db_path = temp_dir / "test.db"
-    return SQLiteProvider(str(db_path))
+@pytest.fixture
+def sqlite_url(tmp_path: Path) -> str:
+    """SQLite database URL for testing."""
+    return f"sqlite:///{tmp_path / 'test.db'}"
 
 
 @pytest.fixture
-def duckdb_provider(temp_dir: Path) -> DuckDBProvider:
-    """DuckDB database provider for testing."""
-    db_path = temp_dir / "test.duckdb"
-    return DuckDBProvider(str(db_path))
+def sqlite_provider(sqlite_url: str) -> NexusQLProvider:
+    """NexusQL provider backed by SQLite for testing."""
+    return NexusQLProvider(sqlite_url)
 
 
 @pytest.fixture

@@ -96,12 +96,12 @@ class AppMigrationService:
     async def _get_current_manifest(self, app_id: str) -> Optional[Dict[str, Any]]:
         """Get the current manifest for an app"""
         query = """
-            SELECT manifest_yaml FROM app_versions 
-            WHERE app_id = $1 
-            ORDER BY created_at DESC 
+            SELECT manifest_yaml FROM app_versions
+            WHERE app_id = :app_id
+            ORDER BY created_at DESC
             LIMIT 1
         """
-        result = await self.db.fetch_one(query, app_id)
+        result = await self.db.fetch_one(query, {"app_id": app_id})
         
         if not result or not result["manifest_yaml"]:
             return None
@@ -171,8 +171,8 @@ class AppMigrationService:
     
     async def _count_app_data(self, app_id: str) -> int:
         """Count total data items for an app"""
-        query = "SELECT COUNT(*) FROM app_model_items WHERE app_id = $1"
-        return await self.db.fetch_val(query, app_id) or 0
+        query = "SELECT COUNT(*) FROM app_model_items WHERE app_id = :app_id"
+        return await self.db.fetch_val(query, {"app_id": app_id}) or 0
     
     async def _check_model_changes(
         self, current: Dict[str, Any], new: Dict[str, Any]

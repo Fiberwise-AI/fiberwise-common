@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 
 from .base_service import BaseService
-from ..database.query_adapter import QueryAdapter, ParameterStyle
 import logging
 
 logger = logging.getLogger(__name__)
@@ -31,7 +30,6 @@ class ProviderService(BaseService):
     
     def __init__(self, db_provider, config_dir: Optional[str] = None):
         super().__init__(db_provider)
-        self.query_adapter = QueryAdapter(ParameterStyle.SQLITE)
         self.config_dir = Path(config_dir or os.path.expanduser("~/.fiberwise/providers"))
         
         # Ensure config directory exists

@@ -6,7 +6,7 @@ import json
 from datetime import datetime
 from typing import Optional, List, Any, Dict
 from .base_service import BaseService
-from ..database.providers import DatabaseProvider
+from ..database.provider import DatabaseProvider
 from .connection_manager import ConnectionManager
 from ..entities.user import User
 from ..entities.pipeline import Pipeline, PipelineExecution, PipelineExecutionResult, PipelineStep, PipelineExecutionContext
@@ -110,8 +110,8 @@ class PipelineService(BaseService):
             # Normalize path separators for cross-platform compatibility
             normalized_path = file_path.replace('\\', '/')
             
-            query = "SELECT * FROM pipelines WHERE file_path = $1 OR file_path = $2"
-            result = await self.db.fetch_one(query, file_path, normalized_path)
+            query = "SELECT * FROM pipelines WHERE file_path = :file_path OR file_path = :normalized_path"
+            result = await self.db.fetch_one(query, {"file_path": file_path, "normalized_path": normalized_path})
             
             return self._convert_db_record_to_pipeline(result)
         except Exception as e:
@@ -129,8 +129,8 @@ class PipelineService(BaseService):
             Pipeline record or None if not found.
         """
         try:
-            query = "SELECT * FROM pipelines WHERE pipeline_id = $1"
-            result = await self.db.fetch_one(query, str(pipeline_id))
+            query = "SELECT * FROM pipelines WHERE pipeline_id = :pipeline_id"
+            result = await self.db.fetch_one(query, {"pipeline_id": str(pipeline_id)})
             
             return self._convert_db_record_to_pipeline(result)
         except Exception as e:
@@ -153,42 +153,37 @@ class PipelineService(BaseService):
         """
         try:
             conditions = []
-            params = []
-            param_count = 0
-            
+            params = {}
+
             if app_id is not None:
-                param_count += 1
-                conditions.append(f"app_id = ${param_count}")
-                params.append(str(app_id))
-            
+                conditions.append("app_id = :app_id")
+                params["app_id"] = str(app_id)
+
             if user_id is not None:
-                param_count += 1
-                conditions.append(f"created_by = ${param_count}")
-                params.append(user_id)
-            
+                conditions.append("created_by = :created_by")
+                params["created_by"] = user_id
+
             where_clause = ""
             if conditions:
                 where_clause = "WHERE " + " AND ".join(conditions)
-            
-            param_count += 1
-            limit_clause = f"LIMIT ${param_count}"
-            params.append(limit)
-            
-            param_count += 1
-            offset_clause = f"OFFSET ${param_count}"
-            params.append(offset)
-            
+
+            limit_clause = "LIMIT :limit"
+            params["limit"] = limit
+
+            offset_clause = "OFFSET :offset"
+            params["offset"] = offset
+
             query = f"""
-                SELECT pipeline_id, pipeline_slug, name, description, file_path, 
-                       definition, config, app_id, is_active, created_by, 
+                SELECT pipeline_id, pipeline_slug, name, description, file_path,
+                       definition, config, app_id, is_active, created_by,
                        created_at, updated_at
-                FROM pipelines 
+                FROM pipelines
                 {where_clause}
                 ORDER BY created_at DESC
                 {limit_clause} {offset_clause}
             """
-            
-            results = await self.db.fetch_all(query, *params)
+
+            results = await self.db.fetch_all(query, params)
             
             if results:
                 pipelines = []
@@ -237,21 +232,21 @@ class PipelineService(BaseService):
             start_time = datetime.now().isoformat()
             insert_execution_query = """
                 INSERT INTO pipeline_executions (
-                    execution_id, pipeline_id, status, input_data, created_by, 
+                    execution_id, pipeline_id, status, input_data, created_by,
                     started_at, created_at, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                ) VALUES (:execution_id, :pipeline_id, :status, :input_data, :created_by, :started_at, :created_at, :updated_at)
             """
-            
+
             # Insert execution record directly using database provider
             await self.db.execute(
                 insert_execution_query,
-                execution_id, pipeline_id, 'running', json.dumps(input_data), 
-                user_id, start_time, start_time, start_time
+                {"execution_id": execution_id, "pipeline_id": pipeline_id, "status": 'running', "input_data": json.dumps(input_data),
+                 "created_by": user_id, "started_at": start_time, "created_at": start_time, "updated_at": start_time}
             )
             
             # Get pipeline definition from database
-            pipeline_query = "SELECT * FROM pipelines WHERE pipeline_id = $1"
-            pipeline_record = await self.db.fetch_one(pipeline_query, pipeline_id)
+            pipeline_query = "SELECT * FROM pipelines WHERE pipeline_id = :pipeline_id"
+            pipeline_record = await self.db.fetch_one(pipeline_query, {"pipeline_id": pipeline_id})
             
             if not pipeline_record:
                 raise ValueError(f"Pipeline {pipeline_id} not found")
@@ -298,14 +293,14 @@ class PipelineService(BaseService):
             duration_ms = int((datetime.fromisoformat(end_time) - datetime.fromisoformat(start_time)).total_seconds() * 1000)
             
             update_execution_query = """
-                UPDATE pipeline_executions 
-                SET status = 'completed', completed_at = $1, duration_ms = $2, 
-                    results = $3, updated_at = $4
-                WHERE execution_id = $5
+                UPDATE pipeline_executions
+                SET status = 'completed', completed_at = :completed_at, duration_ms = :duration_ms,
+                    results = :results, updated_at = :updated_at
+                WHERE execution_id = :execution_id
             """
             await self.db.execute(
-                update_execution_query, 
-                end_time, duration_ms, json.dumps(result.dict()), end_time, execution_id
+                update_execution_query,
+                {"completed_at": end_time, "duration_ms": duration_ms, "results": json.dumps(result.dict()), "updated_at": end_time, "execution_id": execution_id}
             )
             
             logger.info(f"Pipeline {pipeline_id} execution {execution_id} completed successfully")
@@ -320,14 +315,14 @@ class PipelineService(BaseService):
                 duration_ms = int((datetime.fromisoformat(end_time) - datetime.fromisoformat(start_time)).total_seconds() * 1000)
                 
                 update_execution_query = """
-                    UPDATE pipeline_executions 
-                    SET status = 'failed', completed_at = $1, duration_ms = $2, 
-                        error = $3, updated_at = $4
-                    WHERE execution_id = $5
+                    UPDATE pipeline_executions
+                    SET status = 'failed', completed_at = :completed_at, duration_ms = :duration_ms,
+                        error = :error, updated_at = :updated_at
+                    WHERE execution_id = :execution_id
                 """
                 await self.db.execute(
-                    update_execution_query, 
-                    end_time, duration_ms, str(e), end_time, execution_id
+                    update_execution_query,
+                    {"completed_at": end_time, "duration_ms": duration_ms, "error": str(e), "updated_at": end_time, "execution_id": execution_id}
                 )
             except Exception as update_error:
                 logger.error(f"Error updating failed execution record: {update_error}")
@@ -797,10 +792,10 @@ class PipelineService(BaseService):
             # Fallback: Get the bundle directory from the pipeline version
             version_query = """
                 SELECT file_path FROM pipeline_versions
-                WHERE pipeline_id = $1 AND is_active = 1
+                WHERE pipeline_id = :pipeline_id AND is_active = 1
                 ORDER BY created_at DESC LIMIT 1
             """
-            version_record = await self.db.fetch_one(version_query, str(pipeline_id))
+            version_record = await self.db.fetch_one(version_query, {"pipeline_id": str(pipeline_id)})
             if not version_record or not version_record['file_path']:
                 raise ValueError(f"No active version with file_path found for pipeline {pipeline_id}")
 
@@ -973,8 +968,8 @@ class PipelineService(BaseService):
             app_id = pipeline.app_id
             if not app_id:
                 # Query database to get app_id for this pipeline
-                query = "SELECT app_id FROM pipelines WHERE pipeline_id = $1"
-                pipeline_record = await self.db.fetch_one(query, pipeline_id)
+                query = "SELECT app_id FROM pipelines WHERE pipeline_id = :pipeline_id"
+                pipeline_record = await self.db.fetch_one(query, {"pipeline_id": pipeline_id})
                 if pipeline_record:
                     app_id = pipeline_record['app_id']
                 else:
@@ -982,11 +977,11 @@ class PipelineService(BaseService):
             
             # Get active version_id from pipeline_versions table (like agents)
             version_query = """
-                SELECT version_id FROM pipeline_versions 
-                WHERE pipeline_id = $1 AND is_active = 1 
+                SELECT version_id FROM pipeline_versions
+                WHERE pipeline_id = :pipeline_id AND is_active = 1
                 ORDER BY created_at DESC LIMIT 1
             """
-            version_record = await self.db.fetch_one(version_query, pipeline_id)
+            version_record = await self.db.fetch_one(version_query, {"pipeline_id": pipeline_id})
             if not version_record:
                 raise ValueError(f"No active version found for pipeline {pipeline_id}")
             
@@ -1270,21 +1265,21 @@ class PipelineService(BaseService):
             insert_query = """
                 INSERT INTO pipeline_executions (
                     execution_id, pipeline_id, status, input_data, created_by, priority
-                ) VALUES ($1, $2, $3, $4, $5, $6)
+                ) VALUES (:execution_id, :pipeline_id, :status, :input_data, :created_by, :priority)
             """
-            
-            params = (
-                execution_id,
-                pipeline_id,
-                status,
-                json.dumps(input_data),
-                created_by,
-                priority
-            )
-            await self.db.execute(insert_query, *params)
-            
-            select_query = "SELECT * FROM pipeline_executions WHERE execution_id = $1"
-            result = await self.db.fetch_one(select_query, execution_id)
+
+            params = {
+                "execution_id": execution_id,
+                "pipeline_id": pipeline_id,
+                "status": status,
+                "input_data": json.dumps(input_data),
+                "created_by": created_by,
+                "priority": priority
+            }
+            await self.db.execute(insert_query, params)
+
+            select_query = "SELECT * FROM pipeline_executions WHERE execution_id = :execution_id"
+            result = await self.db.fetch_one(select_query, {"execution_id": execution_id})
             
             if not result:
                 raise Exception("Failed to create and retrieve pipeline execution record")
@@ -1318,59 +1313,57 @@ class PipelineService(BaseService):
         try:
             # Build WHERE clause
             where_conditions = []
-            params = []
-            param_count = 1
-            
+            params = {}
+
             if status:
-                where_conditions.append(f"pe.status = ${param_count}")
-                params.append(status)
-                param_count += 1
-            
+                where_conditions.append("pe.status = :status")
+                params["status"] = status
+
             if app_id:
-                where_conditions.append(f"p.app_id = ${param_count}")
-                params.append(app_id)
-                param_count += 1
-                
+                where_conditions.append("p.app_id = :app_id")
+                params["app_id"] = app_id
+
             if user_id:
-                where_conditions.append(f"pe.created_by = ${param_count}")
-                params.append(user_id)
-                param_count += 1
-                
+                where_conditions.append("pe.created_by = :created_by")
+                params["created_by"] = user_id
+
             where_clause = ""
             if where_conditions:
                 where_clause = "WHERE " + " AND ".join(where_conditions)
-            
+
             # Count query - need JOIN if filtering by app_id or user_id
             if app_id or user_id:
                 count_query = f"""
-                    SELECT COUNT(*) as total 
+                    SELECT COUNT(*) as total
                     FROM pipeline_executions pe
                     LEFT JOIN pipelines p ON pe.pipeline_id = p.pipeline_id
                     {where_clause}
                 """
             else:
                 count_query = f"SELECT COUNT(*) as total FROM pipeline_executions pe {where_clause}"
-            count_result = await self.db.fetch_one(count_query, *params)
+            count_result = await self.db.fetch_one(count_query, params)
             total = count_result['total'] if count_result else 0
-            
+
             # Main query with pagination
+            params["limit"] = limit
+            params["offset"] = offset
+
             main_query = f"""
-                SELECT 
+                SELECT
                     pe.execution_id, pe.pipeline_id, pe.status, pe.priority,
                     pe.input_data, pe.context, pe.results, pe.error,
                     pe.started_at, pe.completed_at, pe.duration_ms,
                     pe.created_by, pe.created_at, pe.updated_at,
                     pe.human_input_config, pe.human_input_data, pe.waiting_step_id,
-                    p.name as pipeline_name, p.app_id 
+                    p.name as pipeline_name, p.app_id
                 FROM pipeline_executions pe
                 LEFT JOIN pipelines p ON pe.pipeline_id = p.pipeline_id
                 {where_clause}
-                ORDER BY pe.created_at DESC 
-                LIMIT ${param_count} OFFSET ${param_count + 1}
+                ORDER BY pe.created_at DESC
+                LIMIT :limit OFFSET :offset
             """
-            
-            params.extend([limit, offset])
-            results = await self.db.fetch_all(main_query, *params)
+
+            results = await self.db.fetch_all(main_query, params)
             items = [dict(row) for row in results] if results else []
             
             return {
@@ -1405,25 +1398,26 @@ class PipelineService(BaseService):
         """
         try:
             # Build WHERE clause
-            where_conditions = ["pipeline_id = $1"]
-            params = [pipeline_id]
-            param_count = 2
-            
+            where_conditions = ["pipeline_id = :pipeline_id"]
+            params = {"pipeline_id": pipeline_id}
+
             if status:
-                where_conditions.append(f"status = ${param_count}")
-                params.append(status)
-                param_count += 1
-                
+                where_conditions.append("status = :status")
+                params["status"] = status
+
             where_clause = "WHERE " + " AND ".join(where_conditions)
-            
+
             # Count query
             count_query = f"SELECT COUNT(*) as total FROM pipeline_executions {where_clause}"
-            count_result = await self.db.fetch_one(count_query, *params)
+            count_result = await self.db.fetch_one(count_query, params)
             total = count_result['total'] if count_result else 0
-            
+
             # Main query with pagination
+            params["limit"] = limit
+            params["offset"] = offset
+
             main_query = f"""
-                SELECT 
+                SELECT
                     pe.execution_id, pe.pipeline_id, pe.status, pe.priority,
                     pe.input_data, pe.context, pe.results, pe.error,
                     pe.started_at, pe.completed_at, pe.duration_ms,
@@ -1433,12 +1427,11 @@ class PipelineService(BaseService):
                 FROM pipeline_executions pe
                 LEFT JOIN pipelines p ON pe.pipeline_id = p.pipeline_id
                 {where_clause}
-                ORDER BY pe.created_at DESC 
-                LIMIT ${param_count} OFFSET ${param_count + 1}
+                ORDER BY pe.created_at DESC
+                LIMIT :limit OFFSET :offset
             """
-            
-            params.extend([limit, offset])
-            results = await self.db.fetch_all(main_query, *params)
+
+            results = await self.db.fetch_all(main_query, params)
             items = [dict(row) for row in results] if results else []
             
             return {
@@ -1468,10 +1461,10 @@ class PipelineService(BaseService):
                 SELECT pe.*, p.name as pipeline_name, p.app_id
                 FROM pipeline_executions pe
                 LEFT JOIN pipelines p ON pe.pipeline_id = p.pipeline_id
-                WHERE pe.execution_id = $1
+                WHERE pe.execution_id = :execution_id
             """
-            
-            result = await self.db.fetch_one(query, execution_id)
+
+            result = await self.db.fetch_one(query, {"execution_id": execution_id})
             
             return self._convert_db_record_to_pipeline_execution(result)
             

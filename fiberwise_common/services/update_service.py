@@ -47,9 +47,9 @@ class UpdateService:
             # Verify agent exists and get current details
             agent_query = """
                 SELECT name, agent_type_id, app_id FROM agents
-                WHERE agent_id = $1
+                WHERE agent_id = :agent_id
             """
-            agent_record = await conn.fetch_one(agent_query, agent_id)
+            agent_record = await conn.fetch_one(agent_query, {"agent_id": agent_id})
             
             if not agent_record:
                 return {
@@ -98,14 +98,14 @@ class UpdateService:
             if implementation_type != 'unknown':
                 # Set has_custom_code flag to true
                 await conn.execute(
-                    "UPDATE agents SET has_custom_code = true WHERE agent_id = $1",
-                    agent_id
+                    "UPDATE agents SET has_custom_code = true WHERE agent_id = :agent_id",
+                    {"agent_id": agent_id}
                 )
                 
                 # Deactivate all existing implementations
                 await conn.execute(
-                    "UPDATE agent_implementations SET is_active = false WHERE agent_id = $1",
-                    agent_id
+                    "UPDATE agent_implementations SET is_active = false WHERE agent_id = :agent_id",
+                    {"agent_id": agent_id}
                 )
                 
                 # For inline implementation, store it directly
@@ -116,23 +116,26 @@ class UpdateService:
                             agent_id, implementation_code, implementation_path,
                             entrypoint_file, class_name, language, is_active, created_by
                         ) VALUES (
-                            $1, $2, $3, $4, $5, $6, $7, $8
+                            :agent_id, :implementation_code, :implementation_path,
+                            :entrypoint_file, :class_name, :language, :is_active, :created_by
                         ) RETURNING implementation_id
                     """
-                    
+
                     # Get version from manifest
                     version = getattr(agent_manifest, 'version', '1.0.0')
-                    
+
                     implementation_id = await conn.fetch_val(
                         implementation_query,
-                        agent_id,
-                        implementation,  # Use the processed implementation code for inline type
-                        None,            # implementation_path
-                        None,            # entrypoint_file
-                        None,            # class_name
-                        language,
-                        True,            # is_active
-                        current_user.id
+                        {
+                            "agent_id": agent_id,
+                            "implementation_code": implementation,  # Use the processed implementation code for inline type
+                            "implementation_path": None,
+                            "entrypoint_file": None,
+                            "class_name": None,
+                            "language": language,
+                            "is_active": True,
+                            "created_by": current_user.id,
+                        }
                     )
                     
                     logger.info(f"Stored inline implementation for agent: {agent_manifest.name} with ID {implementation_id}")
@@ -144,23 +147,26 @@ class UpdateService:
                             agent_id, implementation_code, implementation_path,
                             entrypoint_file, class_name, language, is_active, created_by
                         ) VALUES (
-                            $1, NULL, $2, $3, $4, $5, $6, $7
+                            :agent_id, NULL, :implementation_path,
+                            :entrypoint_file, :class_name, :language, :is_active, :created_by
                         ) RETURNING implementation_id
                     """
-                    
+
                     # Get entrypoint file and class name for directory implementations
                     entrypoint_file = getattr(agent_manifest, 'entrypoint_file', None)
                     class_name = getattr(agent_manifest, 'class_name', None)
-                    
+
                     implementation_id = await conn.fetch_val(
                         implementation_query,
-                        agent_id,
-                        implementation_path,  # implementation_path
-                        entrypoint_file,
-                        class_name,
-                        language,
-                        True,  # is_active
-                        current_user.id
+                        {
+                            "agent_id": agent_id,
+                            "implementation_path": implementation_path,
+                            "entrypoint_file": entrypoint_file,
+                            "class_name": class_name,
+                            "language": language,
+                            "is_active": True,
+                            "created_by": current_user.id,
+                        }
                     )
                     
                     logger.info(f"Stored file implementation reference for agent: {agent_manifest.name} (language: {language})")
@@ -169,9 +175,9 @@ class UpdateService:
             activate_query = """
                 UPDATE agent_versions
                 SET is_active = true
-                WHERE version_id = $1
+                WHERE version_id = :version_id
             """
-            await conn.execute(activate_query, str(version_id))
+            await conn.execute(activate_query, {"version_id": str(version_id)})
             
             return {
                 "id": agent_id,
@@ -195,8 +201,8 @@ class UpdateService:
         """Update an existing pipeline with a new version"""
         try:
             # Verify pipeline exists
-            pipeline_query = "SELECT name FROM pipelines WHERE pipeline_id = $1"
-            pipeline_name = await conn.fetch_val(pipeline_query, pipeline_id)
+            pipeline_query = "SELECT name FROM pipelines WHERE pipeline_id = :pipeline_id"
+            pipeline_name = await conn.fetch_val(pipeline_query, {"pipeline_id": pipeline_id})
             
             if not pipeline_name:
                 return {
@@ -212,17 +218,17 @@ class UpdateService:
             # Update file_path on the main pipeline record
             file_path = getattr(pipeline_manifest, 'file_path', getattr(pipeline_manifest, 'implementation_path', None))
             if file_path:
-                update_query = "UPDATE pipelines SET file_path = $1, updated_at = CURRENT_TIMESTAMP WHERE pipeline_id = $2"
-                await conn.execute(update_query, file_path, pipeline_id)
+                update_query = "UPDATE pipelines SET file_path = :file_path, updated_at = CURRENT_TIMESTAMP WHERE pipeline_id = :pipeline_id"
+                await conn.execute(update_query, {"file_path": file_path, "pipeline_id": pipeline_id})
             
             # Mark the version as active
             activate_query = """
                 UPDATE pipeline_versions
                 SET is_active = true
-                WHERE version_id = $1
+                WHERE version_id = :version_id
             """
-            await conn.execute(activate_query, str(version_id))
-            
+            await conn.execute(activate_query, {"version_id": str(version_id)})
+
             return {
                 "id": pipeline_id,
                 "version_id": str(version_id),
@@ -243,8 +249,8 @@ class UpdateService:
         """Update an existing workflow with a new version"""
         try:
             # Verify workflow exists
-            workflow_query = "SELECT name FROM workflows WHERE workflow_id = $1"
-            workflow_name = await conn.fetch_val(workflow_query, workflow_id)
+            workflow_query = "SELECT name FROM workflows WHERE workflow_id = :workflow_id"
+            workflow_name = await conn.fetch_val(workflow_query, {"workflow_id": workflow_id})
             
             if not workflow_name:
                 return {
@@ -261,10 +267,10 @@ class UpdateService:
             activate_query = """
                 UPDATE workflow_versions
                 SET status = 'active'
-                WHERE workflow_version_id = $1
+                WHERE workflow_version_id = :version_id
             """
-            await conn.execute(activate_query, str(version_id))
-            
+            await conn.execute(activate_query, {"version_id": str(version_id)})
+
             return {
                 "id": workflow_id,
                 "version_id": str(version_id),
@@ -285,8 +291,8 @@ class UpdateService:
         """Update an existing function with a new version"""
         try:
             # Verify function exists
-            function_query = "SELECT name FROM functions WHERE function_id = $1"
-            function_name = await conn.fetch_val(function_query, function_id)
+            function_query = "SELECT name FROM functions WHERE function_id = :function_id"
+            function_name = await conn.fetch_val(function_query, {"function_id": function_id})
             
             if not function_name:
                 return {
@@ -303,10 +309,10 @@ class UpdateService:
             activate_query = """
                 UPDATE function_versions
                 SET status = 'active'
-                WHERE function_version_id = $1
+                WHERE function_version_id = :version_id
             """
-            await conn.execute(activate_query, str(version_id))
-            
+            await conn.execute(activate_query, {"version_id": str(version_id)})
+
             return {
                 "id": function_id,
                 "version_id": str(version_id),
@@ -356,13 +362,13 @@ class UpdateService:
             
             # Query the latest version
             query = f"""
-                SELECT version 
-                FROM {table} 
-                WHERE {id_column} = $1
+                SELECT version
+                FROM {table}
+                WHERE {id_column} = :component_id
                 ORDER BY created_at DESC
                 LIMIT 1
             """
-            current_version = await self.db.fetch_val(query, component_id)
+            current_version = await self.db.fetch_val(query, {"component_id": component_id})
             
             # If no current version exists, or the version has changed, return True
             if current_version is None or current_version != new_version:

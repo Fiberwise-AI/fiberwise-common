@@ -20,7 +20,6 @@ from typing import Dict, List, Optional, Any
 from uuid import uuid4
 
 from .base_service import BaseService
-from ..database.query_adapter import QueryAdapter, ParameterStyle
 from .oauth_provider_handlers import get_provider_handler
 
 logger = logging.getLogger(__name__)
@@ -41,7 +40,6 @@ class OAuthService(BaseService):
     
     def __init__(self, db_provider):
         super().__init__(db_provider)
-        self.query_adapter = QueryAdapter(ParameterStyle.SQLITE)
     
     # ===== AUTHENTICATOR MANAGEMENT =====
     
@@ -82,18 +80,29 @@ class OAuthService(BaseService):
         }
         
         try:
-            query = self.query_adapter.convert_query("""
+            query = """
                 INSERT INTO oauth_authenticators
-                (authenticator_id, authenticator_name, authenticator_type, client_id, client_secret, 
+                (authenticator_id, authenticator_name, authenticator_type, client_id, client_secret,
                  redirect_uri, scopes, app_id, configuration, is_active, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-            """, ParameterStyle.POSTGRESQL)
-            
+                VALUES (:authenticator_id, :authenticator_name, :authenticator_type, :client_id, :client_secret,
+                 :redirect_uri, :scopes, :app_id, :configuration, :is_active, :created_at, :updated_at)
+            """
+
             await self.db.execute(
-                query, authenticator_id, authenticator_name, authenticator_type,
-                client_id, client_secret, redirect_uri, json.dumps(scopes),
-                app_id, json.dumps(kwargs), True,
-                authenticator_config["created_at"], authenticator_config["updated_at"]
+                query, {
+                    "authenticator_id": authenticator_id,
+                    "authenticator_name": authenticator_name,
+                    "authenticator_type": authenticator_type,
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "redirect_uri": redirect_uri,
+                    "scopes": json.dumps(scopes),
+                    "app_id": app_id,
+                    "configuration": json.dumps(kwargs),
+                    "is_active": True,
+                    "created_at": authenticator_config["created_at"],
+                    "updated_at": authenticator_config["updated_at"]
+                }
             )
             
             logger.info(f"Registered OAuth authenticator: {authenticator_name}")
@@ -105,11 +114,11 @@ class OAuthService(BaseService):
     
     async def get_oauth_authenticator(self, authenticator_id: str) -> Optional[Dict[str, Any]]:
         """Get a specific OAuth authenticator by ID."""
-        query = self.query_adapter.convert_query("""
-            SELECT * FROM oauth_authenticators WHERE authenticator_id = $1 AND is_active = true
-        """, ParameterStyle.POSTGRESQL)
-        
-        row = await self.db.fetch_one(query, authenticator_id)
+        query = """
+            SELECT * FROM oauth_authenticators WHERE authenticator_id = :authenticator_id AND is_active = true
+        """
+
+        row = await self.db.fetch_one(query, {"authenticator_id": authenticator_id})
         
         if row:
             # Parse scopes and unescape any HTML entities
@@ -148,8 +157,8 @@ class OAuthService(BaseService):
         try:
             if user_id:
                 # Include connection status for the user
-                query = self.query_adapter.convert_query("""
-                SELECT 
+                query = """
+                SELECT
                     oa.authenticator_id,
                     oa.authenticator_name,
                     oa.authenticator_type,
@@ -159,24 +168,24 @@ class OAuthService(BaseService):
                     oa.client_id,
                     oa.client_secret,
                     oa.configuration,
-                    CASE 
+                    CASE
                         WHEN EXISTS (
                             SELECT 1 FROM user_app_oauth_authentications uaoa
                             JOIN oauth_token_grants otg ON uaoa.grant_id = otg.grant_id
-                            WHERE uaoa.authenticator_id = oa.authenticator_id 
-                            AND uaoa.app_id = $1 AND uaoa.user_id = $2 
+                            WHERE uaoa.authenticator_id = oa.authenticator_id
+                            AND uaoa.app_id = :app_id AND uaoa.user_id = :user_id
                             AND uaoa.is_active = true AND otg.is_revoked = false
                             AND otg.access_token IS NOT NULL AND otg.access_token != 'pending'
                         )
-                        THEN true 
-                        ELSE false 
+                        THEN true
+                        ELSE false
                     END as is_connected,
-                    CASE 
+                    CASE
                         WHEN EXISTS (
                             SELECT 1 FROM user_app_oauth_authentications uaoa
                             JOIN oauth_token_grants otg ON uaoa.grant_id = otg.grant_id
-                            WHERE uaoa.authenticator_id = oa.authenticator_id 
-                            AND uaoa.app_id = $3 AND uaoa.user_id = $4 
+                            WHERE uaoa.authenticator_id = oa.authenticator_id
+                            AND uaoa.app_id = :app_id AND uaoa.user_id = :user_id
                             AND uaoa.is_active = true AND otg.is_revoked = false
                             AND otg.access_token = 'pending'
                         )
@@ -184,8 +193,8 @@ class OAuthService(BaseService):
                         WHEN EXISTS (
                             SELECT 1 FROM user_app_oauth_authentications uaoa
                             JOIN oauth_token_grants otg ON uaoa.grant_id = otg.grant_id
-                            WHERE uaoa.authenticator_id = oa.authenticator_id 
-                            AND uaoa.app_id = $5 AND uaoa.user_id = $6 
+                            WHERE uaoa.authenticator_id = oa.authenticator_id
+                            AND uaoa.app_id = :app_id AND uaoa.user_id = :user_id
                             AND uaoa.is_active = true AND otg.is_revoked = false
                             AND otg.access_token IS NOT NULL AND otg.access_token != 'pending'
                         )
@@ -193,13 +202,13 @@ class OAuthService(BaseService):
                         ELSE 'disconnected'
                     END as connection_status
                 FROM oauth_authenticators oa
-                WHERE oa.app_id = $7 AND oa.is_active = true
-                """)
-                authenticators = await self.db.fetch_all(query, str(app_id), user_id, str(app_id), user_id, str(app_id), user_id, str(app_id))
+                WHERE oa.app_id = :app_id AND oa.is_active = true
+                """
+                authenticators = await self.db.fetch_all(query, {"app_id": str(app_id), "user_id": user_id})
             else:
                 # Just get the authenticators, no connection status
-                query = self.query_adapter.convert_query("""
-                SELECT 
+                query = """
+                SELECT
                     oa.authenticator_id,
                     oa.authenticator_name,
                     oa.authenticator_type,
@@ -211,9 +220,9 @@ class OAuthService(BaseService):
                     oa.configuration,
                     false as is_connected
                 FROM oauth_authenticators oa
-                WHERE oa.app_id = $1 AND oa.is_active = true
-                """)
-                authenticators = await self.db.fetch_all(query, str(app_id))
+                WHERE oa.app_id = :app_id AND oa.is_active = true
+                """
+                authenticators = await self.db.fetch_all(query, {"app_id": str(app_id)})
             
             # Format results
             result = []
@@ -337,16 +346,23 @@ class OAuthService(BaseService):
         }
         
         try:
-            query = self.query_adapter.convert_query("""
+            query = """
                 INSERT INTO oauth_sessions
                 (session_id, authenticator_id, user_id, state_token, redirect_uri, scopes, created_at, expires_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            """, ParameterStyle.POSTGRESQL)
-            
+                VALUES (:session_id, :authenticator_id, :user_id, :state_token, :redirect_uri, :scopes, :created_at, :expires_at)
+            """
+
             await self.db.execute(
-                query, session_id, authenticator_id, user_id, state_token,
-                final_redirect_uri, json.dumps(final_scopes),
-                session_data["created_at"], expires_at
+                query, {
+                    "session_id": session_id,
+                    "authenticator_id": authenticator_id,
+                    "user_id": user_id,
+                    "state_token": state_token,
+                    "redirect_uri": final_redirect_uri,
+                    "scopes": json.dumps(final_scopes),
+                    "created_at": session_data["created_at"],
+                    "expires_at": expires_at
+                }
             )
             
             logger.info(f"Created OAuth session for authenticator: {authenticator_id}")
@@ -358,12 +374,12 @@ class OAuthService(BaseService):
     
     async def get_oauth_session(self, state_token: str) -> Optional[Dict[str, Any]]:
         """Get OAuth session by state token."""
-        query = self.query_adapter.convert_query("""
-            SELECT * FROM oauth_sessions 
-            WHERE state_token = $1 AND expires_at > datetime('now')
-        """, ParameterStyle.POSTGRESQL)
-        
-        row = await self.db.fetch_one(query, state_token)
+        query = """
+            SELECT * FROM oauth_sessions
+            WHERE state_token = :state_token AND expires_at > datetime('now')
+        """
+
+        row = await self.db.fetch_one(query, {"state_token": state_token})
         
         if row:
             return {
@@ -475,25 +491,33 @@ class OAuthService(BaseService):
             # Store token grant
             token_query = """
                 INSERT INTO oauth_token_grants (
-                    grant_id, user_id, authenticator_id, access_token, refresh_token, 
+                    grant_id, user_id, authenticator_id, access_token, refresh_token,
                     expires_at, token_type, scopes, created_at, updated_at, is_revoked
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, false)
+                VALUES (:grant_id, :user_id, :authenticator_id, :access_token, :refresh_token,
+                 :expires_at, :token_type, :scopes, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, false)
             """
-            
+
             await self.db.execute(
-                token_query,
-                grant_id, user_id, authenticator_id, access_token, refresh_token,
-                expires_at, token_type, json.dumps(scope.split() if scope else [])
+                token_query, {
+                    "grant_id": grant_id,
+                    "user_id": user_id,
+                    "authenticator_id": authenticator_id,
+                    "access_token": access_token,
+                    "refresh_token": refresh_token,
+                    "expires_at": expires_at,
+                    "token_type": token_type,
+                    "scopes": json.dumps(scope.split() if scope else [])
+                }
             )
             
             # Create user-app-authenticator association
             auth_query = """
                 INSERT INTO user_app_oauth_authentications (
-                    user_id, app_id, authenticator_id, grant_id, 
+                    user_id, app_id, authenticator_id, grant_id,
                     auth_status, created_at, updated_at, is_active
                 )
-                VALUES ($1, $2, $3, $4, 'completed', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, true)
+                VALUES (:user_id, :app_id, :authenticator_id, :grant_id, 'completed', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, true)
                 ON CONFLICT (user_id, app_id, authenticator_id)
                 DO UPDATE SET
                     grant_id = EXCLUDED.grant_id,
@@ -501,8 +525,13 @@ class OAuthService(BaseService):
                     updated_at = CURRENT_TIMESTAMP,
                     is_active = true
             """
-            
-            await self.db.execute(auth_query, user_id, app_id, authenticator_id, grant_id)
+
+            await self.db.execute(auth_query, {
+                "user_id": user_id,
+                "app_id": app_id,
+                "authenticator_id": authenticator_id,
+                "grant_id": grant_id
+            })
             
             logger.info(f"Successfully stored token for authenticator {authenticator_id}")
             
@@ -519,26 +548,30 @@ class OAuthService(BaseService):
         """Get stored token for user and authenticator."""
         try:
             query = """
-                SELECT 
-                    otg.access_token, 
-                    otg.refresh_token, 
-                    otg.expires_at, 
+                SELECT
+                    otg.access_token,
+                    otg.refresh_token,
+                    otg.expires_at,
                     otg.token_type,
                     otg.scopes
                 FROM oauth_token_grants otg
                 JOIN user_app_oauth_authentications uaoa ON otg.grant_id = uaoa.grant_id
-                WHERE 
-                    uaoa.authenticator_id = $1 AND
-                    uaoa.user_id = $2 AND
-                    uaoa.app_id = $3 AND
+                WHERE
+                    uaoa.authenticator_id = :authenticator_id AND
+                    uaoa.user_id = :user_id AND
+                    uaoa.app_id = :app_id AND
                     uaoa.is_active = true AND
                     otg.is_revoked = false AND
                     otg.access_token IS NOT NULL
                 ORDER BY otg.created_at DESC
                 LIMIT 1
             """
-            
-            token_row = await self.db.fetch_one(query, authenticator_id, user_id, app_id)
+
+            token_row = await self.db.fetch_one(query, {
+                "authenticator_id": authenticator_id,
+                "user_id": user_id,
+                "app_id": app_id
+            })
             
             if token_row:
                 return {
@@ -685,17 +718,20 @@ class OAuthService(BaseService):
             
             # Query the database for the token
             query = """
-                SELECT 
+                SELECT
                     access_token,
                     refresh_token,
                     expires_at,
                     token_type,
                     scopes as scope
                 FROM oauth_token_grants
-                WHERE authenticator_id = $1 AND user_id = $2
+                WHERE authenticator_id = :authenticator_id AND user_id = :user_id
             """
-            
-            token_record = await self.db.fetch_one(query, service_provider_id, user_id)
+
+            token_record = await self.db.fetch_one(query, {
+                "authenticator_id": service_provider_id,
+                "user_id": user_id
+            })
             
             if not token_record:
                 return None
@@ -933,18 +969,18 @@ class OAuthService(BaseService):
             
             # Query the oauth_authenticators table for provider information
             query = """
-                SELECT 
+                SELECT
                     authenticator_id,
                     authenticator_name,
                     authenticator_type,
                     scopes,
                     configuration,
                     is_active
-                FROM oauth_authenticators 
-                WHERE authenticator_id = $1 AND is_active = true
+                FROM oauth_authenticators
+                WHERE authenticator_id = :authenticator_id AND is_active = true
             """
-            
-            result = await self.db.fetch_one(query, service_provider_id)
+
+            result = await self.db.fetch_one(query, {"authenticator_id": service_provider_id})
             
             if not result:
                 return {
@@ -1014,17 +1050,17 @@ class OAuthService(BaseService):
             # Get all active authenticators
             if app_id:
                 query = """
-                    SELECT 
+                    SELECT
                         authenticator_id,
                         authenticator_name,
                         authenticator_type,
                         scopes,
                         is_active
-                    FROM oauth_authenticators 
-                    WHERE is_active = true AND app_id = $1
+                    FROM oauth_authenticators
+                    WHERE is_active = true AND app_id = :app_id
                     ORDER BY authenticator_name
                 """
-                providers_result = await self.db.fetch_all(query, app_id)
+                providers_result = await self.db.fetch_all(query, {"app_id": app_id})
             else:
                 query = """
                     SELECT 
@@ -1076,10 +1112,10 @@ class OAuthService(BaseService):
             updated_at = datetime.now().isoformat()
             
             result = await self.db.execute("""
-                UPDATE oauth_authenticators 
-                SET is_active = false, updated_at = ?
-                WHERE authenticator_id = ?
-            """, updated_at, authenticator_id)
+                UPDATE oauth_authenticators
+                SET is_active = false, updated_at = :updated_at
+                WHERE authenticator_id = :authenticator_id
+            """, {"updated_at": updated_at, "authenticator_id": authenticator_id})
             
             if result is not None:
                 logger.info(f"Deactivated OAuth authenticator: {authenticator_id}")

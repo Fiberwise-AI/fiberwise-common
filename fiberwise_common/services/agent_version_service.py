@@ -46,12 +46,12 @@ class AgentVersionService(BaseService):
         # First check if there's already ANY version for this agent with the same version number
         check_version_query = """
             SELECT version_id FROM agent_versions
-            WHERE agent_id = $1 AND version = $2
+            WHERE agent_id = :agent_id AND version = :version
             ORDER BY created_at DESC
             LIMIT 1
         """
 
-        existing_version_id = await self.db.fetch_val(check_version_query, str(agent_id), version)
+        existing_version_id = await self.db.fetch_val(check_version_query, {"agent_id": str(agent_id), "version": version})
 
         logger.info(f"AgentVersionService: Checking for existing draft version for agent {agent_id} version {version}: found={existing_version_id}")
 
@@ -66,17 +66,19 @@ class AgentVersionService(BaseService):
                     version_id, agent_id, version, file_path,
                     status, is_active, created_by
                 ) VALUES (
-                    $1, $2, $3, $4, 'draft', false, $5
+                    :version_id, :agent_id, :version, :file_path, 'draft', false, :created_by
                 ) RETURNING version_id
             """
 
             version_id = await self.db.fetch_val(
                 insert_query,
-                str(version_id),
-                str(agent_id),
-                version,
-                file_path,
-                str(created_by) if created_by else None
+                {
+                    "version_id": str(version_id),
+                    "agent_id": str(agent_id),
+                    "version": version,
+                    "file_path": file_path,
+                    "created_by": str(created_by) if created_by else None,
+                }
             )
         
         logger.info(f"Created new version {version} with ID {version_id} for agent {agent_id}")
@@ -95,11 +97,11 @@ class AgentVersionService(BaseService):
         query = """
             SELECT version_id, version, status, is_active, created_at
             FROM agent_versions
-            WHERE agent_id = $1
+            WHERE agent_id = :agent_id
             ORDER BY created_at DESC
             LIMIT 1
         """
-        version_record = await self._fetch_one(query, (str(agent_id),))
+        version_record = await self._fetch_one(query, {"agent_id": str(agent_id)})
         
         if version_record:
             return dict(version_record)
@@ -117,8 +119,8 @@ class AgentVersionService(BaseService):
         """
         try:
             # First get the agent_id for this version
-            agent_query = "SELECT agent_id FROM agent_versions WHERE version_id = $1"
-            agent_id = await self.db.fetch_val(agent_query, str(version_id))
+            agent_query = "SELECT agent_id FROM agent_versions WHERE version_id = :version_id"
+            agent_id = await self.db.fetch_val(agent_query, {"version_id": str(version_id)})
             
             if not agent_id:
                 logger.error(f"No agent found for version {version_id}")
@@ -128,17 +130,17 @@ class AgentVersionService(BaseService):
             deactivate_query = """
                 UPDATE agent_versions
                 SET is_active = false
-                WHERE agent_id = $1
+                WHERE agent_id = :agent_id
             """
-            await self._execute_query(deactivate_query, (str(agent_id),))
+            await self._execute_query(deactivate_query, {"agent_id": str(agent_id)})
             
             # Activate the specified version
             activate_query = """
                 UPDATE agent_versions
                 SET is_active = true, status = 'active'
-                WHERE version_id = $1
+                WHERE version_id = :version_id
             """
-            await self._execute_query(activate_query, (str(version_id),))
+            await self._execute_query(activate_query, {"version_id": str(version_id)})
             
             logger.info(f"Activated agent version {version_id}")
             return True

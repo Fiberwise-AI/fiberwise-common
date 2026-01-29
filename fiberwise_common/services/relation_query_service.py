@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 async def get_related_entities(
     app_id: Union[str, UUID],
     source_model_slug: str,
-    target_model_slug: str, 
+    target_model_slug: str,
     relation_field: str,
     target_entity_id: str,
     page: int = 1,
@@ -23,7 +23,7 @@ async def get_related_entities(
 ) -> Dict[str, Any]:
     """
     Get all entities from one model that reference a specific entity via a relation field.
-    
+
     Args:
         app_id: The app UUID
         source_model_slug: The model containing the relation field
@@ -33,7 +33,7 @@ async def get_related_entities(
         page: Page number for pagination
         limit: Items per page
         db: Database provider instance
-        
+
     Returns:
         Dict with items and pagination info
     """
@@ -46,50 +46,50 @@ async def get_related_entities(
             "page": page,
             "pages": 0
         }
-    
+
     app_id_str = str(app_id)
     offset = (page - 1) * limit
-    
+
     # First try to get the view name from metadata
     view_query = """
-        SELECT 'rel_view_' || substring(md5($1::text || '_' || $2 || '_' || $3 || '_' || $4), 1, 20) as view_name
+        SELECT 'rel_view_' || substring(md5(:app_id::text || '_' || :source_model_slug || '_' || :target_model_slug || '_' || :relation_field), 1, 20) as view_name
     """
-    view_result = await db.fetch_one(view_query, app_id_str, source_model_slug, target_model_slug, relation_field)
+    view_result = await db.fetch_one(view_query, {"app_id": app_id_str, "source_model_slug": source_model_slug, "target_model_slug": target_model_slug, "relation_field": relation_field})
     view_name = view_result['view_name'] if view_result else None
-    
+
     # Check if the view actually exists
     view_exists = False
     if view_name:
-        check_query = "SELECT to_regclass($1::text) IS NOT NULL"
-        view_exists = await db.fetch_val(check_query, view_name)
-    
+        check_query = "SELECT to_regclass(:view_name::text) IS NOT NULL"
+        view_exists = await db.fetch_val(check_query, {"view_name": view_name})
+
     if view_exists:
         # Use the optimized view
         logger.debug(f"Using optimized view {view_name} for relation query")
         items_query = f"""
             SELECT * FROM {view_name}
-            WHERE related_id = $1
+            WHERE related_id = :related_id
             ORDER BY updated_at DESC
-            LIMIT $2 OFFSET $3
+            LIMIT :limit OFFSET :offset
         """
         count_query = f"""
             SELECT COUNT(*) FROM {view_name}
-            WHERE related_id = $1
+            WHERE related_id = :related_id
         """
-        
+
         # Execute queries using the view
-        items = await db.fetch_all(items_query, target_entity_id, limit, offset)
-        total = await db.fetch_val(count_query, target_entity_id)
+        items = await db.fetch_all(items_query, {"related_id": target_entity_id, "limit": limit, "offset": offset})
+        total = await db.fetch_val(count_query, {"related_id": target_entity_id})
     else:
         # Fallback to direct JSONB query with dynamic path
         logger.debug(f"Using direct JSONB query for relation: {source_model_slug}.{relation_field} -> {target_model_slug}")
-        
+
         # Get model ID for the source model
         model_id_query = """
             SELECT model_id FROM models
-            WHERE app_id = $1 AND model_slug = $2
+            WHERE app_id = :app_id AND model_slug = :model_slug
         """
-        model_id = await db.fetch_val(model_id_query, app_id_str, source_model_slug)
+        model_id = await db.fetch_val(model_id_query, {"app_id": app_id_str, "model_slug": source_model_slug})
         if not model_id:
             logger.error(f"Model not found: {source_model_slug} in app {app_id_str}")
             return {
@@ -99,43 +99,43 @@ async def get_related_entities(
                 "page": page,
                 "pages": 0
             }
-        
+
         # Direct query using JSONB operator
         items_query = """
             SELECT i.* FROM app_model_items i
-            WHERE i.model_id = $1
-            AND i.data->>$2 = $3
+            WHERE i.model_id = :model_id
+            AND i.data->>:relation_field = :target_entity_id
             ORDER BY i.updated_at DESC
-            LIMIT $4 OFFSET $5
+            LIMIT :limit OFFSET :offset
         """
         count_query = """
             SELECT COUNT(*) FROM app_model_items i
-            WHERE i.model_id = $1
-            AND i.data->>$2 = $3
+            WHERE i.model_id = :model_id
+            AND i.data->>:relation_field = :target_entity_id
         """
-        
+
         # Execute queries using direct JSONB filtering
-        items = await db.fetch_all(items_query, model_id, relation_field, target_entity_id, limit, offset)
-        total = await db.fetch_val(count_query, model_id, relation_field, target_entity_id)
-        
+        items = await db.fetch_all(items_query, {"model_id": model_id, "relation_field": relation_field, "target_entity_id": target_entity_id, "limit": limit, "offset": offset})
+        total = await db.fetch_val(count_query, {"model_id": model_id, "relation_field": relation_field, "target_entity_id": target_entity_id})
+
         # Create the relation view for future calls if both models exist
         target_exists_query = """
             SELECT 1 FROM models
-            WHERE app_id = $1 AND model_slug = $2
+            WHERE app_id = :app_id AND model_slug = :model_slug
             LIMIT 1
         """
-        target_exists = await db.fetch_val(target_exists_query, app_id_str, target_model_slug)
-        
+        target_exists = await db.fetch_val(target_exists_query, {"app_id": app_id_str, "model_slug": target_model_slug})
+
         if target_exists:
             try:
                 logger.info(f"Creating missing relation view for {source_model_slug}.{relation_field} -> {target_model_slug}")
                 await db.execute(
-                    "SELECT create_relation_view($1, $2, $3, $4)",
-                    app_id_str, source_model_slug, target_model_slug, relation_field
+                    "SELECT create_relation_view(:app_id, :source_model_slug, :target_model_slug, :relation_field)",
+                    {"app_id": app_id_str, "source_model_slug": source_model_slug, "target_model_slug": target_model_slug, "relation_field": relation_field}
                 )
             except Exception as e:
                 logger.warning(f"Failed to create relation view: {str(e)}")
-    
+
     # Process items - parse JSON data
     result_items = []
     for item in items:
@@ -147,7 +147,7 @@ async def get_related_entities(
                 logger.warning(f"Invalid JSON in data field for item {item_dict.get('item_id')}")
                 item_dict["data"] = {}
         result_items.append(item_dict)
-    
+
     return {
         "items": result_items,
         "count": len(result_items),
@@ -166,7 +166,7 @@ async def find_entities_by_properties(
 ) -> Dict[str, Any]:
     """
     Generic function to find entities by their properties (field values)
-    
+
     Args:
         app_id: The app UUID
         model_slug: The model to query
@@ -174,7 +174,7 @@ async def find_entities_by_properties(
         page: Page number
         limit: Items per page
         db: Database provider instance
-        
+
     Returns:
         Dict with items and pagination info
     """
@@ -187,13 +187,13 @@ async def find_entities_by_properties(
             "page": page,
             "pages": 0
         }
-    
+
     app_id_str = str(app_id)
     offset = (page - 1) * limit
-    
+
     # Validate model exists
-    model_query = "SELECT model_id FROM models WHERE app_id = $1 AND model_slug = $2"
-    model_id = await db.fetch_val(model_query, app_id_str, model_slug)
+    model_query = "SELECT model_id FROM models WHERE app_id = :app_id AND model_slug = :model_slug"
+    model_id = await db.fetch_val(model_query, {"app_id": app_id_str, "model_slug": model_slug})
     if not model_id:
         logger.error(f"Model not found: {model_slug} in app {app_id_str}")
         return {
@@ -203,51 +203,51 @@ async def find_entities_by_properties(
             "page": page,
             "pages": 0
         }
-    
+
     # Build the query dynamically based on filter conditions
     if not properties:
         # Simple query without filters
         items_query = """
             SELECT * FROM app_model_items
-            WHERE model_id = $1
+            WHERE model_id = :model_id
             ORDER BY updated_at DESC
-            LIMIT $2 OFFSET $3
+            LIMIT :limit OFFSET :offset
         """
-        count_query = "SELECT COUNT(*) FROM app_model_items WHERE model_id = $1"
-        
-        items = await db.fetch_all(items_query, model_id, limit, offset)
-        total = await db.fetch_val(count_query, model_id)
+        count_query = "SELECT COUNT(*) FROM app_model_items WHERE model_id = :model_id"
+
+        items = await db.fetch_all(items_query, {"model_id": model_id, "limit": limit, "offset": offset})
+        total = await db.fetch_val(count_query, {"model_id": model_id})
     else:
         # Build query with filters
         where_clauses = []
-        query_params = [model_id]  # Start with model_id
-        
-        for idx, (field, value) in enumerate(properties.items(), start=1):
-            where_clauses.append(f"data->>'{field}' = ${idx + 1}")
-            query_params.append(str(value))  # Convert value to string for JSONB comparison
-        
+        query_params = {"model_id": model_id}
+
+        for idx, (field, value) in enumerate(properties.items()):
+            param_name = f"prop_{idx}"
+            where_clauses.append(f"data->>'{field}' = :{param_name}")
+            query_params[param_name] = str(value)  # Convert value to string for JSONB comparison
+
         items_query = f"""
             SELECT * FROM app_model_items
-            WHERE model_id = $1
+            WHERE model_id = :model_id
             AND {' AND '.join(where_clauses)}
             ORDER BY updated_at DESC
-            LIMIT ${len(query_params) + 1} OFFSET ${len(query_params) + 2}
+            LIMIT :limit OFFSET :offset
         """
-        
+
         count_query = f"""
             SELECT COUNT(*) FROM app_model_items
-            WHERE model_id = $1
+            WHERE model_id = :model_id
             AND {' AND '.join(where_clauses)}
         """
-        
-        # Add pagination parameters
-        items_params = query_params.copy()
-        items_params.extend([limit, offset])
-        
+
+        # Add pagination parameters for items query
+        items_params = {**query_params, "limit": limit, "offset": offset}
+
         # Execute queries
-        items = await db.fetch_all(items_query, *items_params)
-        total = await db.fetch_val(count_query, *query_params)
-    
+        items = await db.fetch_all(items_query, items_params)
+        total = await db.fetch_val(count_query, query_params)
+
     # Process items - parse JSON data
     result_items = []
     for item in items:
@@ -259,7 +259,7 @@ async def find_entities_by_properties(
                 logger.warning(f"Invalid JSON in data field for item {item_dict.get('item_id')}")
                 item_dict["data"] = {}
         result_items.append(item_dict)
-    
+
     return {
         "items": result_items,
         "count": len(result_items),
@@ -267,4 +267,3 @@ async def find_entities_by_properties(
         "page": page,
         "pages": (total + limit - 1) // limit if limit > 0 else 0
     }
-

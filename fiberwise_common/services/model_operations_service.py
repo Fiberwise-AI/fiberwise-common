@@ -45,8 +45,8 @@ class ModelOperationsService(BaseService):
         """
         try:
             # Get models (no is_active column in schema)
-            models_query = "SELECT * FROM models WHERE app_id = $1 ORDER BY model_id"
-            models = await self.db.fetch_all(models_query, str(app_id))
+            models_query = "SELECT * FROM models WHERE app_id = :app_id ORDER BY model_id"
+            models = await self.db.fetch_all(models_query, {"app_id": str(app_id)})
             
             logger.info(f"Found {len(models)} existing models for app {app_id}")
             
@@ -56,8 +56,8 @@ class ModelOperationsService(BaseService):
                 logger.info(f"Processing existing model: {model_data.get('model_slug')} - {model_data.get('name')}")
                 
                 # Get fields for this model (no is_active column in schema)
-                fields_query = "SELECT * FROM fields WHERE model_id = $1 ORDER BY field_id"
-                fields = await self.db.fetch_all(fields_query, model_data["model_id"])
+                fields_query = "SELECT * FROM fields WHERE model_id = :model_id ORDER BY field_id"
+                fields = await self.db.fetch_all(fields_query, {"model_id": model_data["model_id"]})
                 
                 model_data["fields"] = [dict(field) for field in fields]
                 result.append(model_data)
@@ -168,13 +168,13 @@ class ModelOperationsService(BaseService):
                 
                 model_query = """
                     INSERT INTO models (model_id, app_id, model_slug, name, description, created_at, updated_at)
-                    VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+                    VALUES (:model_id, :app_id, :model_slug, :name, :description, NOW(), NOW())
                     RETURNING model_id, created_at, updated_at
                 """
                 logger.info(f"Creating model: {model_slug} for app {app_id} with ID: {model_id}")
                 model_result = await conn.fetch_one(
                     model_query,
-                    model_id, str(app_id), model_slug, model_name, model_description
+                    {"model_id": model_id, "app_id": str(app_id), "model_slug": model_slug, "name": model_name, "description": model_description}
                 )
                 
                 if not model_result:
@@ -210,14 +210,14 @@ class ModelOperationsService(BaseService):
                     field_query = """
                         INSERT INTO fields (
                             field_id, model_id, field_column, name, data_type, is_required, is_unique, is_primary_key
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                        ) VALUES (:field_id, :model_id, :field_column, :name, :data_type, :is_required, :is_unique, :is_primary_key)
                         RETURNING field_id
                     """
-                    
+
                     field_result = await conn.fetch_one(
                         field_query,
-                        field_id, model_id, field_column, field_name, data_type,
-                        is_required, is_unique, is_primary_key
+                        {"field_id": field_id, "model_id": model_id, "field_column": field_column, "name": field_name, "data_type": data_type,
+                         "is_required": is_required, "is_unique": is_unique, "is_primary_key": is_primary_key}
                     )
                     returned_field_id = field_result["field_id"]
 
@@ -286,8 +286,8 @@ class ModelOperationsService(BaseService):
                 field_def = field_info["field"]
                 
                 # Get model ID
-                model_query = "SELECT model_id FROM models WHERE app_id = $1 AND model_slug = $2"
-                model_id = await conn.fetch_val(model_query, str(app_id), model_slug)
+                model_query = "SELECT model_id FROM models WHERE app_id = :app_id AND model_slug = :model_slug"
+                model_id = await conn.fetch_val(model_query, {"app_id": str(app_id), "model_slug": model_slug})
                 
                 if not model_id:
                     logger.warning(f"Model {model_slug} not found for app {app_id}")
@@ -311,14 +311,14 @@ class ModelOperationsService(BaseService):
                 field_query = """
                     INSERT INTO fields (
                         field_id, model_id, field_column, name, data_type, is_required, is_unique, is_primary_key
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    ) VALUES (:field_id, :model_id, :field_column, :name, :data_type, :is_required, :is_unique, :is_primary_key)
                     RETURNING field_id
                 """
-                
+
                 field_result = await conn.fetch_one(
                     field_query,
-                    field_id, model_id, field_column, field_name, data_type,
-                    is_required, is_unique, is_primary_key
+                    {"field_id": field_id, "model_id": model_id, "field_column": field_column, "name": field_name, "data_type": data_type,
+                     "is_required": is_required, "is_unique": is_unique, "is_primary_key": is_primary_key}
                 )
                 
                 added_fields.append({

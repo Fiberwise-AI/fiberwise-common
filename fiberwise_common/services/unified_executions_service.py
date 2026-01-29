@@ -47,47 +47,41 @@ class UnifiedExecutionsService:
         try:
             # Build query with filters
             query_parts = ["SELECT * FROM unified_executions WHERE 1=1"]
-            params = []
-            param_index = 1
-            
+            params = {}
+
             if status:
-                query_parts.append(f"AND status = ${param_index}")
-                params.append(status)
-                param_index += 1
-                
+                query_parts.append("AND status = :status")
+                params["status"] = status
+
             if execution_type:
-                query_parts.append(f"AND execution_type = ${param_index}")
-                params.append(execution_type)
-                param_index += 1
-                
+                query_parts.append("AND execution_type = :execution_type")
+                params["execution_type"] = execution_type
+
             if entity_id:
-                query_parts.append(f"AND entity_id = ${param_index}")
-                params.append(entity_id)
-                param_index += 1
-                
+                query_parts.append("AND entity_id = :entity_id")
+                params["entity_id"] = entity_id
+
             if created_by:
-                query_parts.append(f"AND created_by = ${param_index}")
-                params.append(created_by)
-                param_index += 1
-                
+                query_parts.append("AND created_by = :created_by")
+                params["created_by"] = created_by
+
             if start_date:
-                query_parts.append(f"AND started_at >= ${param_index}")
-                params.append(start_date)
-                param_index += 1
-                
+                query_parts.append("AND started_at >= :start_date")
+                params["start_date"] = start_date
+
             if end_date:
-                query_parts.append(f"AND started_at <= ${param_index}")
-                params.append(end_date)
-                param_index += 1
-            
+                query_parts.append("AND started_at <= :end_date")
+                params["end_date"] = end_date
+
             # Add ordering and pagination
             query_parts.append("ORDER BY started_at DESC")
-            query_parts.append(f"LIMIT ${param_index} OFFSET ${param_index + 1}")
-            params.extend([limit, offset])
-            
+            query_parts.append("LIMIT :limit OFFSET :offset")
+            params["limit"] = limit
+            params["offset"] = offset
+
             # Execute query
             query = " ".join(query_parts)
-            results = await self.db.fetch_all(query, *params)
+            results = await self.db.fetch_all(query, params)
             
             # Process results
             executions = []
@@ -125,22 +119,19 @@ class UnifiedExecutionsService:
         try:
             # Base query for stats
             where_clause = ""
-            params = []
-            
+            params = {}
+
             if start_date or end_date:
                 conditions = []
-                param_index = 1
-                
+
                 if start_date:
-                    conditions.append(f"started_at >= ${param_index}")
-                    params.append(start_date)
-                    param_index += 1
-                    
+                    conditions.append("started_at >= :start_date")
+                    params["start_date"] = start_date
+
                 if end_date:
-                    conditions.append(f"started_at <= ${param_index}")
-                    params.append(end_date)
-                    param_index += 1
-                
+                    conditions.append("started_at <= :end_date")
+                    params["end_date"] = end_date
+
                 where_clause = "WHERE " + " AND ".join(conditions)
             
             # Get overall stats
@@ -158,8 +149,8 @@ class UnifiedExecutionsService:
                 ORDER BY execution_type, status
             """
             
-            results = await self.db.fetch_all(query, *params)
-            
+            results = await self.db.fetch_all(query, params)
+
             # Process stats
             stats = {
                 'total': 0,
@@ -255,14 +246,14 @@ class UnifiedExecutionsService:
         try:
             # If type is specified, query the specific table
             if execution_type == 'agent':
-                query = "SELECT *, 'agent' as execution_type FROM agent_activations WHERE activation_id = $1"
+                query = "SELECT *, 'agent' as execution_type FROM agent_activations WHERE activation_id = :execution_id"
             elif execution_type == 'function':
-                query = "SELECT *, 'function' as execution_type FROM function_executions WHERE execution_id = $1"
+                query = "SELECT *, 'function' as execution_type FROM function_executions WHERE execution_id = :execution_id"
             else:
                 # Search both tables
-                query = "SELECT * FROM unified_executions WHERE execution_id = $1"
-            
-            result = await self.db.fetch_one(query, execution_id)
+                query = "SELECT * FROM unified_executions WHERE execution_id = :execution_id"
+
+            result = await self.db.fetch_one(query, {"execution_id": execution_id})
             
             if result:
                 execution = dict(result)

@@ -26,114 +26,91 @@ class BaseService(ABC):
         """
         self.db = db_provider
         self.logger = logging.getLogger(logger_name or self.__class__.__name__)
-        # Query adapter can be set by subclasses that need it
-        self.query_adapter = None
-    
-    def _convert_query_if_needed(self, query: str) -> str:
-        """
-        Convert query using query adapter if available.
-        
-        Args:
-            query: Original SQL query
-            
-        Returns:
-            Converted query if adapter available, otherwise original query
-        """
-        if hasattr(self, 'query_adapter') and self.query_adapter:
-            return self.query_adapter.convert_query(query)
-        return query
-    
-    async def _execute_query(self, query: str, params: tuple = ()) -> Any:
+
+    async def _execute_query(self, query: str, params: Optional[Dict[str, Any]] = None) -> Any:
         """
         Execute a database query with error handling.
-        
+
         Args:
-            query: SQL query string
-            params: Query parameters
-            
+            query: SQL query string with :param_name placeholders
+            params: Dict of named parameters
+
         Returns:
             Query result
-            
+
         Raises:
             ServiceError: If query execution fails
         """
         try:
-            converted_query = self._convert_query_if_needed(query)
-            return await self.db.execute(converted_query, *params)
+            return await self.db.execute(query, params)
         except Exception as e:
             self.logger.error(f"Query execution failed: {query} - {e}")
             raise ServiceError(f"Database operation failed: {e}") from e
-    
-    async def _fetch_one(self, query: str, params: tuple = ()) -> Optional[Dict[str, Any]]:
+
+    async def _fetch_one(self, query: str, params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
         """
         Fetch a single row from database.
-        
+
         Args:
-            query: SQL query string
-            params: Query parameters
-            
+            query: SQL query string with :param_name placeholders
+            params: Dict of named parameters
+
         Returns:
             Single row as dict or None
         """
         try:
-            converted_query = self._convert_query_if_needed(query)
-            row = await self.db.fetch_one(converted_query, *params)
-            return dict(row) if row else None
+            return await self.db.fetch_one(query, params)
         except Exception as e:
             self.logger.error(f"Fetch one failed: {query} - {e}")
             raise ServiceError(f"Database fetch failed: {e}") from e
-    
-    async def _fetch_all(self, query: str, params: tuple = ()) -> List[Dict[str, Any]]:
+
+    async def _fetch_all(self, query: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """
         Fetch all rows from database.
-        
+
         Args:
-            query: SQL query string
-            params: Query parameters
-            
+            query: SQL query string with :param_name placeholders
+            params: Dict of named parameters
+
         Returns:
             List of rows as dicts
         """
         try:
-            converted_query = self._convert_query_if_needed(query)
-            rows = await self.db.fetch_all(converted_query, *params)
-            return [dict(row) for row in rows] if rows else []
+            return await self.db.fetch_all(query, params)
         except Exception as e:
             self.logger.error(f"Fetch all failed: {query} - {e}")
             raise ServiceError(f"Database fetch failed: {e}") from e
-    
-    async def _execute(self, query: str, params: tuple = ()) -> Any:
+
+    async def _execute(self, query: str, params: Optional[Dict[str, Any]] = None) -> Any:
         """
         Execute a database query (INSERT, UPDATE, DELETE).
-        
+
         Args:
-            query: SQL query string
-            params: Query parameters
-            
+            query: SQL query string with :param_name placeholders
+            params: Dict of named parameters
+
         Returns:
             Query result
         """
         try:
-            converted_query = self._convert_query_if_needed(query)
-            return await self.db.execute(converted_query, *params)
+            return await self.db.execute(query, params)
         except Exception as e:
             self.logger.error(f"Execute failed: {query} - {e}")
             raise ServiceError(f"Database execute failed: {e}") from e
-    
-    async def _execute_many(self, query: str, params_list: List[tuple]) -> Any:
+
+    async def _execute_many(self, query: str, params_list: List[Dict[str, Any]]) -> Any:
         """
         Execute a query multiple times with different parameters.
-        
+
         Args:
-            query: SQL query string
-            params_list: List of parameter tuples
-            
+            query: SQL query string with :param_name placeholders
+            params_list: List of parameter dicts
+
         Returns:
             Query result
         """
         try:
-            converted_query = self._convert_query_if_needed(query)
-            return await self.db.execute_many(converted_query, params_list)
+            return await self.db.execute_many(query, params_list)
         except Exception as e:
             self.logger.error(f"Execute many failed: {query} - {e}")
             raise ServiceError(f"Database execute many failed: {e}") from e

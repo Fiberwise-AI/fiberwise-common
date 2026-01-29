@@ -9,7 +9,7 @@ This module provides utilities for managing user context across different execut
 import os
 import getpass
 from typing import Optional, Dict, Any
-from ..database.base import DatabaseProvider
+from ..database.provider import DatabaseProvider
 
 
 class FiberLocalContextService:

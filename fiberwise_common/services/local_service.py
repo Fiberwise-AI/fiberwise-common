@@ -5,8 +5,7 @@ Provides a unified interface for local data access without REST API calls.
 
 import logging
 from typing import Dict, Any, List, Optional, Union
-from ..database.providers import DatabaseProvider
-from ..database.query_adapter import create_query_adapter, QueryAdapter
+from ..database.provider import DatabaseProvider
 from .base_service import BaseService
 from .agent_service import AgentService
 from .user_service import UserService
@@ -31,9 +30,7 @@ class LocalService(BaseService):
         super().__init__(database_provider)
         self.db_provider = database_provider
         
-        # Create query adapter for database compatibility
-        provider_type = self._get_provider_type(database_provider)
-        self.query_adapter = create_query_adapter(provider_type)
+        # NexusQL handles query translation internally
         
         # Initialize services
         self._agent_service = None
@@ -41,7 +38,7 @@ class LocalService(BaseService):
         self._pipeline_service = None
         
         logger.info(f"LocalService initialized with database provider: {type(database_provider).__name__}")
-        logger.info(f"Query adapter created for provider type: {provider_type}")
+        logger.info(f"Provider type: {type(database_provider).__name__}")
     
     def _get_provider_type(self, provider: DatabaseProvider) -> str:
         """
@@ -132,39 +129,24 @@ class LocalService(BaseService):
                 "error": str(e)
             }
     
-    async def execute_query(self, query: str, params: Any = None, 
-                          source_style: str = 'postgresql') -> Any:
+    async def execute_query(self, query: str, params: Optional[Dict[str, Any]] = None) -> Any:
         """
-        Execute a query with automatic parameter style conversion.
-        
+        Execute a query using NexusQL named parameters.
+
         Args:
-            query: SQL query string
-            params: Query parameters
-            source_style: Source parameter style ('postgresql', 'sqlite', 'mysql')
-            
+            query: SQL query string with :param_name placeholders
+            params: Dict of named parameters (e.g. {"user_id": 1, "name": "foo"})
+
         Returns:
             Query result
         """
-        from ..database.query_adapter import ParameterStyle
-        
-        # Convert parameter style name to enum
-        style_map = {
-            'postgresql': ParameterStyle.POSTGRESQL,
-            'sqlite': ParameterStyle.SQLITE,
-            'mysql': ParameterStyle.MYSQL,
-            'mssql': ParameterStyle.MSSQL,
-            'named': ParameterStyle.NAMED
-        }
-        
-        source_enum = style_map.get(source_style.lower(), ParameterStyle.POSTGRESQL)
-        converted_query, converted_params = self.query_adapter.adapt_query_and_params(
-            query, params, source_enum
-        )
-        
-        logger.debug(f"Query adapted from {source_style}: {converted_query}")
-        logger.debug(f"Parameters adapted: {converted_params}")
-        
-        return await self.db_provider.execute(converted_query, converted_params)
+        # NexusQL uses named parameters (:param_name) natively
+        logger.debug(f"Executing query: {query}")
+        logger.debug(f"Parameters: {params}")
+
+        if params:
+            return await self.db_provider.execute(query, params)
+        return await self.db_provider.execute(query)
     
     # Agent operations
     async def get_agents(self, **kwargs) -> List[Dict[str, Any]]:

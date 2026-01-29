@@ -30,30 +30,28 @@ class AppAgentService:
         """Get all agents for a specific app with filtering"""
         try:
             # Build query with proper parameters
-            query_parts = ["SELECT * FROM agents WHERE app_id = $1"]
-            params = [app_id]
-            param_idx = 2
-            
+            query_parts = ["SELECT * FROM agents WHERE app_id = :app_id"]
+            params = {"app_id": app_id}
+
             # Add optional filters
             if agent_type_id:
-                query_parts.append(f"AND agent_type_id = ${param_idx}")
-                params.append(agent_type_id)
-                param_idx += 1
-                
+                query_parts.append("AND agent_type_id = :agent_type_id")
+                params["agent_type_id"] = agent_type_id
+
             if status:
                 is_active = status.lower() == 'enabled'
-                query_parts.append(f"AND is_active = ${param_idx}")
-                params.append(is_active)
-                param_idx += 1
-                
+                query_parts.append("AND is_active = :is_active")
+                params["is_active"] = is_active
+
             # Add order and pagination
             query_parts.append("ORDER BY name ASC")
-            query_parts.append(f"LIMIT ${param_idx} OFFSET ${param_idx + 1}")
-            params.extend([limit, offset])
-            
+            query_parts.append("LIMIT :limit OFFSET :offset")
+            params["limit"] = limit
+            params["offset"] = offset
+
             # Execute query
             query = " ".join(query_parts)
-            agent_records = await self.db.fetch_all(query, *params)
+            agent_records = await self.db.fetch_all(query, params)
             
             # Convert to response models, ensuring created_by is a string
             agents = []

@@ -149,27 +149,27 @@ class OAuthInjectionService:
         """
         try:
             token_query = """
-                SELECT 
-                    otg.access_token, 
-                    otg.refresh_token, 
-                    otg.expires_at, 
+                SELECT
+                    otg.access_token,
+                    otg.refresh_token,
+                    otg.expires_at,
                     otg.token_type,
                     otg.scopes as scope
                 FROM oauth_token_grants otg
-                JOIN user_app_oauth_authentications uaoa 
+                JOIN user_app_oauth_authentications uaoa
                     ON otg.grant_id = uaoa.grant_id
-                WHERE 
-                    uaoa.authenticator_id = $1 AND
-                    uaoa.user_id = $2 AND
-                    uaoa.app_id = $3 AND
+                WHERE
+                    uaoa.authenticator_id = :authenticator_id AND
+                    uaoa.user_id = :user_id AND
+                    uaoa.app_id = :app_id AND
                     uaoa.is_active = true AND
                     otg.is_revoked = false AND
                     otg.access_token IS NOT NULL
                 ORDER BY otg.created_at DESC
                 LIMIT 1
             """
-            
-            token_row = await self.db.fetch_one(token_query, authenticator_id, user_id, app_id)
+
+            token_row = await self.db.fetch_one(token_query, {"authenticator_id": authenticator_id, "user_id": user_id, "app_id": app_id})
             
             if token_row:
                 token_data = {

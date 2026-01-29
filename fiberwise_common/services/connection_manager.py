@@ -261,8 +261,8 @@ class ConnectionManager:
         """Get the organization_id for an API key (must be stored on the key)."""
         try:
             # Get the organization_id directly from the API key
-            key_query = "SELECT organization_id FROM agent_api_keys WHERE key_value = $1"
-            key_result = await self.db.fetch_one(key_query, api_key)
+            key_query = "SELECT organization_id FROM agent_api_keys WHERE key_value = :api_key"
+            key_result = await self.db.fetch_one(key_query, {"api_key": api_key})
             
             if not key_result:
                 logger.warning(f"API key not found: {api_key[:10]}...")

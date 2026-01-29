@@ -49,37 +49,37 @@ class AppService:
 
     async def get_app_by_id(self, app_id: str) -> Dict[str, Any]:
         """Get app by ID with validation"""
-        query = "SELECT * FROM apps WHERE app_id = $1"
-        app = await self.db.fetch_one(query, app_id)
+        query = "SELECT * FROM apps WHERE app_id = :app_id"
+        app = await self.db.fetch_one(query, {"app_id": app_id})
         if not app:
             raise ValueError(f"App with id '{app_id}' not found")
         return dict(app)
 
     async def get_app_by_slug(self, app_slug: str) -> Dict[str, Any]:
         """Get app by slug with validation"""
-        query = "SELECT * FROM apps WHERE app_slug = $1"
-        app = await self.db.fetch_one(query, app_slug)
+        query = "SELECT * FROM apps WHERE app_slug = :app_slug"
+        app = await self.db.fetch_one(query, {"app_slug": app_slug})
         if not app:
             raise ValueError(f"App with slug '{app_slug}' not found")
         return dict(app)
 
     async def get_model_by_slug(self, app_id: str, model_slug: str) -> Dict[str, Any]:
         """Get model by slug with validation"""
-        query = "SELECT * FROM models WHERE app_id = $1 AND model_slug = $2"
-        model = await self.db.fetch_one(query, str(app_id), model_slug)
+        query = "SELECT * FROM models WHERE app_id = :app_id AND model_slug = :model_slug"
+        model = await self.db.fetch_one(query, {"app_id": str(app_id), "model_slug": model_slug})
         if not model:
             # Add debug logging to help troubleshoot
             logger.error(f"Model lookup failed for app_id='{app_id}', model_slug='{model_slug}'")
             
             # Check what models exist for this app
-            debug_query = "SELECT model_slug FROM models WHERE app_id = $1"
-            existing_models = await self.db.fetch_all(debug_query, str(app_id))
+            debug_query = "SELECT model_slug FROM models WHERE app_id = :app_id"
+            existing_models = await self.db.fetch_all(debug_query, {"app_id": str(app_id)})
             existing_slugs = [dict(m)['model_slug'] for m in existing_models] if existing_models else []
             logger.error(f"Available models for app '{app_id}': {existing_slugs}")
             
             # Check if app exists at all
-            app_check_query = "SELECT app_id, name FROM apps WHERE app_id = $1"
-            app_exists = await self.db.fetch_one(app_check_query, str(app_id))
+            app_check_query = "SELECT app_id, name FROM apps WHERE app_id = :app_id"
+            app_exists = await self.db.fetch_one(app_check_query, {"app_id": str(app_id)})
             if app_exists:
                 app_info = dict(app_exists)
                 logger.error(f"App exists: id='{app_info['app_id']}', name='{app_info['name']}'")
@@ -91,8 +91,8 @@ class AppService:
 
     async def get_fields_for_model(self, model_id: str) -> List[Dict[str, Any]]:
         """Get all fields for a model"""
-        query = "SELECT * FROM fields WHERE model_id = $1"
-        fields = await self.db.fetch_all(query, str(model_id))
+        query = "SELECT * FROM fields WHERE model_id = :model_id"
+        fields = await self.db.fetch_all(query, {"model_id": str(model_id)})
         
         # Process each field to parse JSON strings
         processed_fields = []
@@ -187,18 +187,18 @@ class AppService:
     async def check_app_access(self, app_id: str, user_id: int) -> bool:
         """Check if user has access to the app (creator or has installed it)"""
         # Check if user is the creator
-        creator_query = "SELECT creator_user_id FROM apps WHERE app_id = $1"
-        creator_id = await self.db.fetch_val(creator_query, str(app_id))
+        creator_query = "SELECT creator_user_id FROM apps WHERE app_id = :app_id"
+        creator_id = await self.db.fetch_val(creator_query, {"app_id": str(app_id)})
         
         if creator_id == user_id:
             return True
         
         # Check if user has installed the app
         installation_query = """
-            SELECT installation_id FROM app_installations 
-            WHERE app_id = $1 AND user_id = $2 AND status = 'active'
+            SELECT installation_id FROM app_installations
+            WHERE app_id = :app_id AND user_id = :user_id AND status = 'active'
         """
-        installation = await self.db.fetch_val(installation_query, str(app_id), user_id)
+        installation = await self.db.fetch_val(installation_query, {"app_id": str(app_id), "user_id": user_id})
         
         if not installation:
             raise ValueError("You don't have access to this app")
@@ -208,22 +208,22 @@ class AppService:
     async def fetch_app_data(self, app_id: str) -> Optional[Dict[str, Any]]:
         """Fetch comprehensive app details with models and fields."""
         try:
-            app_query = "SELECT * FROM apps WHERE app_id = $1"
-            app = await self.db.fetch_one(app_query, str(app_id))
+            app_query = "SELECT * FROM apps WHERE app_id = :app_id"
+            app = await self.db.fetch_one(app_query, {"app_id": str(app_id)})
             if not app: 
                 return None
             app_data = dict(app)
 
             # Fetch models, including is_active status if the column exists
-            models_query = "SELECT * FROM models WHERE app_id = $1 ORDER BY model_id"
-            models = await self.db.fetch_all(models_query, str(app_id))
+            models_query = "SELECT * FROM models WHERE app_id = :app_id ORDER BY model_id"
+            models = await self.db.fetch_all(models_query, {"app_id": str(app_id)})
             app_models = []
             
             for model in models:
                 model_data = dict(model)
                 # Fetch fields, including is_active status if the column exists
-                fields_query = "SELECT * FROM fields WHERE model_id = $1 ORDER BY field_id"
-                fields = await self.db.fetch_all(fields_query, model_data["model_id"])
+                fields_query = "SELECT * FROM fields WHERE model_id = :model_id ORDER BY field_id"
+                fields = await self.db.fetch_all(fields_query, {"model_id": model_data["model_id"]})
                 
                 # Parse JSON fields if stored as strings
                 def safe_json_parse(value):
@@ -262,18 +262,20 @@ class AppService:
             INSERT INTO apps (
                 app_id, app_slug, name, description, version, creator_user_id, updated_at
             ) VALUES (
-                $1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP
+                :app_id, :app_slug, :name, :description, :version, :creator_user_id, CURRENT_TIMESTAMP
             ) RETURNING app_id
         """
-        
+
         created_app_id = await conn.fetch_val(
             insert_query,
-            str(app_id),
-            app_manifest.app_slug,
-            app_manifest.name,
-            app_manifest.description,
-            app_manifest.version,
-            user_id
+            {
+                "app_id": str(app_id),
+                "app_slug": app_manifest.app_slug,
+                "name": app_manifest.name,
+                "description": app_manifest.description,
+                "version": app_manifest.version,
+                "creator_user_id": user_id,
+            }
         )
         
         logger.info(f"Created new app with ID {created_app_id}")
@@ -344,22 +346,24 @@ class AppService:
         
         insert_query = """
             INSERT INTO app_versions (
-                app_version_id, app_id, version, description, manifest_yaml, status, 
+                app_version_id, app_id, version, description, manifest_yaml, status,
                 entry_point_url, created_by
             ) VALUES (
-                $1, $2, $3, $4, $5, 'draft', $6, $7
+                :app_version_id, :app_id, :version, :description, :manifest_yaml, 'draft', :entry_point_url, :created_by
             ) RETURNING app_version_id
         """
-        
+
         version_id = await conn.fetch_val(
             insert_query,
-            str(version_id),
-            str(app_id),
-            version,
-            description,
-            manifest_yaml,
-            entry_point,
-            user_id
+            {
+                "app_version_id": str(version_id),
+                "app_id": str(app_id),
+                "version": version,
+                "description": description,
+                "manifest_yaml": manifest_yaml,
+                "entry_point_url": entry_point,
+                "created_by": user_id,
+            }
         )
         
         logger.info(f"Created new version {version} with ID {version_id} for app {app_id}")
@@ -395,8 +399,8 @@ async def _process_models_from_manifest(db, app_id: str, models_list):
             logger.warning(f"Generated default model_name '{model_name}'")
         
         # Check if model already exists
-        check_query = "SELECT model_id FROM models WHERE app_id = $1 AND model_slug = $2"
-        existing_model = await db.fetch_one(check_query, app_id, model_slug)
+        check_query = "SELECT model_id FROM models WHERE app_id = :app_id AND model_slug = :model_slug"
+        existing_model = await db.fetch_one(check_query, {"app_id": app_id, "model_slug": model_slug})
         
         if existing_model:
             logger.info(f"Model '{model_slug}' already exists, skipping creation")
@@ -406,9 +410,9 @@ async def _process_models_from_manifest(db, app_id: str, models_list):
             model_id = str(uuid.uuid4())
             create_query = """
                 INSERT INTO models (model_id, app_id, model_slug, name, description, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                VALUES (:model_id, :app_id, :model_slug, :name, :description, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             """
-            await db.execute(create_query, model_id, app_id, model_slug, model_name, model_description)
+            await db.execute(create_query, {"model_id": model_id, "app_id": app_id, "model_slug": model_slug, "name": model_name, "description": model_description})
             logger.info(f"Created model '{model_name}' with slug '{model_slug}' and ID {model_id}")
         
         # Process model fields
@@ -435,8 +439,8 @@ async def _process_models_from_manifest(db, app_id: str, models_list):
                 continue
             
             # Check if field already exists
-            field_check_query = "SELECT field_id FROM fields WHERE model_id = $1 AND field_column = $2"
-            existing_field = await db.fetch_one(field_check_query, model_id, field_column)
+            field_check_query = "SELECT field_id FROM fields WHERE model_id = :model_id AND field_column = :field_column"
+            existing_field = await db.fetch_one(field_check_query, {"model_id": model_id, "field_column": field_column})
             
             if existing_field:
                 logger.debug(f"Field '{field_column}' already exists for model {model_slug}")
@@ -448,16 +452,26 @@ async def _process_models_from_manifest(db, app_id: str, models_list):
             
             field_create_query = """
                 INSERT INTO fields (
-                    field_id, model_id, field_column, name, is_primary_key, 
-                    data_type, is_required, is_unique, default_value_json, 
+                    field_id, model_id, field_column, name, is_primary_key,
+                    data_type, is_required, is_unique, default_value_json,
                     validations_json, created_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
+                ) VALUES (:field_id, :model_id, :field_column, :name, :is_primary_key, :data_type, :is_required, :is_unique, :default_value_json, :validations_json, CURRENT_TIMESTAMP)
             """
-            
+
             await db.execute(
-                field_create_query, 
-                field_id, model_id, field_column, field_name, is_primary_key,
-                data_type, is_required, False, default_json, '{}' 
+                field_create_query,
+                {
+                    "field_id": field_id,
+                    "model_id": model_id,
+                    "field_column": field_column,
+                    "name": field_name,
+                    "is_primary_key": is_primary_key,
+                    "data_type": data_type,
+                    "is_required": is_required,
+                    "is_unique": False,
+                    "default_value_json": default_json,
+                    "validations_json": '{}',
+                }
             )
             logger.debug(f"Created field '{field_name}' ({field_column}) for model {model_slug}")
 
@@ -525,10 +539,10 @@ async def validate_app_access(db: DatabaseProvider, app_id: str, user: User, org
 
         # Check if user is an active member of the organization
         member_query = """
-            SELECT 1 FROM organization_members 
-            WHERE user_id = $1 AND organization_id = $2 AND status = 'active'
+            SELECT 1 FROM organization_members
+            WHERE user_id = :user_id AND organization_id = :organization_id AND status = 'active'
         """
-        is_member = await db.fetch_val(member_query, user.id, organization_id)
+        is_member = await db.fetch_val(member_query, {"user_id": user.id, "organization_id": organization_id})
         if not is_member:
             logger.warning(f"User {user.id} is not an active member of organization {organization_id}")
             return False
@@ -537,19 +551,19 @@ async def validate_app_access(db: DatabaseProvider, app_id: str, user: User, org
         creator_query = """
             SELECT 1 FROM apps a
             JOIN organization_members om ON a.creator_user_id = om.user_id
-            WHERE a.app_id = $1 AND om.organization_id = $2
+            WHERE a.app_id = :app_id AND om.organization_id = :organization_id
         """
-        creator_in_org = await db.fetch_val(creator_query, app_id, organization_id)
+        creator_in_org = await db.fetch_val(creator_query, {"app_id": app_id, "organization_id": organization_id})
         if creator_in_org:
             return True
 
         install_query = """
             SELECT 1 FROM app_installations ai
             JOIN organization_members om ON ai.user_id = om.user_id
-            WHERE ai.app_id = $1 AND om.organization_id = $2 AND ai.status = 'active'
+            WHERE ai.app_id = :app_id AND om.organization_id = :organization_id AND ai.status = 'active'
             LIMIT 1
         """
-        installed_in_org = await db.fetch_val(install_query, app_id, organization_id)
+        installed_in_org = await db.fetch_val(install_query, {"app_id": app_id, "organization_id": organization_id})
         if installed_in_org:
             return True
         

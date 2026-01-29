@@ -7,7 +7,7 @@ from typing import Optional, Dict, Any
 
 from .base import WorkerProvider, WorkerConfig, WorkerType
 from .local import LocalWorker
-from ..database.base import DatabaseProvider
+from ..database.provider import DatabaseProvider
 
 
 class WorkerFactory:

@@ -1,367 +1,301 @@
 """
 Unit tests for fiberwise_common.services.base_service module.
 
-Tests the BaseService class that other services inherit from.
+Tests the BaseService class, ServiceRegistry, and service exception hierarchy.
 """
+import asyncio
 import pytest
 from typing import Any, List, Dict, Optional
-from unittest.mock import Mock, AsyncMock, patch
+from unittest.mock import Mock, AsyncMock
 
-from fiberwise_common.services.base_service import BaseService
-from fiberwise_common.database.base import DatabaseProvider
+from fiberwise_common.services.base_service import (
+    BaseService,
+    ServiceError,
+    ValidationError,
+    NotFoundError,
+    AuthorizationError,
+    ServiceRegistry,
+    service_registry,
+)
+from fiberwise_common.database.provider import NexusQLProvider
 
 
 class ConcreteService(BaseService):
     """Concrete implementation of BaseService for testing."""
-    
-    def __init__(self, db_provider: DatabaseProvider):
-        super().__init__(db_provider)
+
+    def __init__(self, db_provider, **kwargs):
+        super().__init__(db_provider, **kwargs)
         self.test_calls = []
-    
+
     async def test_method(self, value: str) -> str:
-        """Test method that uses database operations."""
         self.test_calls.append(value)
         return f"processed_{value}"
 
 
-class TestBaseService:
-    """Test BaseService functionality."""
+class TestBaseServiceInit:
+    """Test BaseService initialization."""
 
     @pytest.fixture
-    def mock_database_provider(self) -> Mock:
-        """Create mock database provider."""
-        db_mock = Mock(spec=DatabaseProvider)
-        db_mock.fetch_all = AsyncMock(return_value=[])
-        db_mock.fetch_one = AsyncMock(return_value=None)
-        db_mock.execute = AsyncMock()
-        db_mock.execute_many = AsyncMock()
-        db_mock.begin_transaction = AsyncMock()
-        db_mock.commit_transaction = AsyncMock()
-        db_mock.rollback_transaction = AsyncMock()
-        return db_mock
+    def mock_db(self):
+        mock = Mock(spec=NexusQLProvider)
+        mock.fetch_all = AsyncMock(return_value=[])
+        mock.fetch_one = AsyncMock(return_value=None)
+        mock.execute = AsyncMock()
+        mock.execute_many = AsyncMock()
+        return mock
 
-    @pytest.fixture
-    def base_service(self, mock_database_provider: Mock) -> ConcreteService:
-        """Create concrete service instance for testing."""
-        return ConcreteService(mock_database_provider)
-
-    def test_base_service_initialization(self, mock_database_provider: Mock):
-        """Test BaseService initialization."""
-        service = ConcreteService(mock_database_provider)
-        
-        assert service.db == mock_database_provider
-        assert hasattr(service, '_fetch_all')
-        assert hasattr(service, '_fetch_one')
-        assert hasattr(service, '_execute')
-        assert hasattr(service, '_execute_many')
-
-    def test_base_service_cannot_instantiate_directly(self):
-        """Test that BaseService cannot be instantiated directly."""
-        mock_db = Mock(spec=DatabaseProvider)
-        
-        # BaseService is not abstract, but typically wouldn't be instantiated directly
-        # This test verifies our concrete implementation works
+    def test_initialization(self, mock_db):
         service = ConcreteService(mock_db)
-        assert isinstance(service, BaseService)
+        assert service.db is mock_db
+        assert service.logger.name == "ConcreteService"
 
-    @pytest.mark.asyncio
-    async def test_fetch_all_delegation(self, base_service: ConcreteService, mock_database_provider: Mock):
-        """Test that _fetch_all delegates to database provider."""
-        mock_database_provider.fetch_all.return_value = [("row1",), ("row2",)]
-        
-        result = await base_service._fetch_all("SELECT * FROM test", ("param1",))
-        
-        mock_database_provider.fetch_all.assert_called_once_with("SELECT * FROM test", ("param1",))
-        assert result == [("row1",), ("row2",)]
+    def test_custom_logger_name(self, mock_db):
+        service = ConcreteService(mock_db, logger_name="custom.logger")
+        assert service.logger.name == "custom.logger"
 
-    @pytest.mark.asyncio
-    async def test_fetch_one_delegation(self, base_service: ConcreteService, mock_database_provider: Mock):
-        """Test that _fetch_one delegates to database provider."""
-        mock_database_provider.fetch_one.return_value = ("single_row",)
-        
-        result = await base_service._fetch_one("SELECT * FROM test WHERE id = ?", (1,))
-        
-        mock_database_provider.fetch_one.assert_called_once_with("SELECT * FROM test WHERE id = ?", (1,))
-        assert result == ("single_row",)
-
-    @pytest.mark.asyncio
-    async def test_execute_delegation(self, base_service: ConcreteService, mock_database_provider: Mock):
-        """Test that _execute delegates to database provider."""
-        await base_service._execute("INSERT INTO test VALUES (?)", ("value1",))
-        
-        mock_database_provider.execute.assert_called_once_with("INSERT INTO test VALUES (?)", ("value1",))
-
-    @pytest.mark.asyncio
-    async def test_execute_many_delegation(self, base_service: ConcreteService, mock_database_provider: Mock):
-        """Test that _execute_many delegates to database provider."""
-        data = [("value1",), ("value2",), ("value3",)]
-        
-        await base_service._execute_many("INSERT INTO test VALUES (?)", data)
-        
-        mock_database_provider.execute_many.assert_called_once_with("INSERT INTO test VALUES (?)", data)
-
-    @pytest.mark.asyncio
-    async def test_database_methods_with_no_params(self, base_service: ConcreteService, mock_database_provider: Mock):
-        """Test database methods called without parameters."""
-        await base_service._fetch_all("SELECT * FROM test")
-        await base_service._fetch_one("SELECT COUNT(*) FROM test")
-        await base_service._execute("UPDATE test SET active = 1")
-        
-        mock_database_provider.fetch_all.assert_called_once_with("SELECT * FROM test", None)
-        mock_database_provider.fetch_one.assert_called_once_with("SELECT COUNT(*) FROM test", None)
-        mock_database_provider.execute.assert_called_once_with("UPDATE test SET active = 1", None)
-
-    @pytest.mark.asyncio
-    async def test_service_inheritance_functionality(self, base_service: ConcreteService):
-        """Test that derived service maintains its own functionality."""
-        result = await base_service.test_method("test_input")
-        
-        assert result == "processed_test_input"
-        assert "test_input" in base_service.test_calls
-
-    @pytest.mark.asyncio
-    async def test_database_error_propagation(self, base_service: ConcreteService, mock_database_provider: Mock):
-        """Test that database errors are properly propagated."""
-        mock_database_provider.fetch_all.side_effect = Exception("Database error")
-        
-        with pytest.raises(Exception, match="Database error"):
-            await base_service._fetch_all("SELECT * FROM test")
-
-    @pytest.mark.parametrize("method_name,db_method", [
-        ("_fetch_all", "fetch_all"),
-        ("_fetch_one", "fetch_one"),
-        ("_execute", "execute"),
-        ("_execute_many", "execute_many")
-    ])
-    @pytest.mark.asyncio
-    async def test_all_database_methods_parametrized(self, base_service: ConcreteService, 
-                                                   mock_database_provider: Mock, method_name: str, db_method: str):
-        """Test all database methods with parametrized approach."""
-        service_method = getattr(base_service, method_name)
-        db_mock_method = getattr(mock_database_provider, db_method)
-        
-        # Call the service method
-        if method_name == "_execute_many":
-            await service_method("SQL", [("data",)])
-            db_mock_method.assert_called_once_with("SQL", [("data",)])
-        else:
-            await service_method("SQL", ("param",))
-            db_mock_method.assert_called_once_with("SQL", ("param",))
+    def test_has_database_methods(self, mock_db):
+        service = ConcreteService(mock_db)
+        assert hasattr(service, "_fetch_all")
+        assert hasattr(service, "_fetch_one")
+        assert hasattr(service, "_execute")
+        assert hasattr(service, "_execute_query")
+        assert hasattr(service, "_execute_many")
 
 
-class TestBaseServiceAdvanced:
-    """Advanced tests for BaseService."""
+class TestBaseServiceDatabaseMethods:
+    """Test BaseService database method delegation."""
 
     @pytest.fixture
-    def failing_db_provider(self) -> Mock:
-        """Create database provider that fails operations."""
-        db_mock = Mock(spec=DatabaseProvider)
-        db_mock.fetch_all = AsyncMock(side_effect=ConnectionError("DB Connection failed"))
-        db_mock.fetch_one = AsyncMock(side_effect=ConnectionError("DB Connection failed"))
-        db_mock.execute = AsyncMock(side_effect=ConnectionError("DB Connection failed"))
-        db_mock.execute_many = AsyncMock(side_effect=ConnectionError("DB Connection failed"))
-        return db_mock
+    def mock_db(self):
+        mock = Mock(spec=NexusQLProvider)
+        mock.fetch_all = AsyncMock(return_value=[])
+        mock.fetch_one = AsyncMock(return_value=None)
+        mock.execute = AsyncMock()
+        mock.execute_many = AsyncMock()
+        return mock
+
+    @pytest.fixture
+    def service(self, mock_db):
+        return ConcreteService(mock_db)
 
     @pytest.mark.asyncio
-    async def test_service_with_failing_database(self, failing_db_provider: Mock):
-        """Test service behavior when database operations fail."""
-        service = ConcreteService(failing_db_provider)
-        
-        with pytest.raises(ServiceError):
-            await service._fetch_all("SELECT * FROM test")
-        
-        with pytest.raises(ServiceError):
-            await service._fetch_one("SELECT * FROM test")
-        
-        with pytest.raises(ServiceError):
-            await service._execute("INSERT INTO test VALUES (1)")
-
-    @pytest.mark.asyncio
-    async def test_concurrent_service_operations(self, mock_database_provider: Mock):
-        """Test concurrent operations through BaseService."""
-        import asyncio
-        
-        service = ConcreteService(mock_database_provider)
-        mock_database_provider.fetch_all.return_value = [("concurrent_result",)]
-        
-        # Execute multiple operations concurrently
-        tasks = [
-            service._fetch_all("SELECT * FROM table1"),
-            service._fetch_all("SELECT * FROM table2"),
-            service._fetch_all("SELECT * FROM table3")
+    async def test_fetch_all_delegates(self, service, mock_db):
+        mock_db.fetch_all.return_value = [
+            {"id": 1, "name": "alice"},
+            {"id": 2, "name": "bob"},
         ]
-        
-        results = await asyncio.gather(*tasks)
-        
+        result = await service._fetch_all(
+            "SELECT * FROM users WHERE active = :active", {"active": True}
+        )
+        mock_db.fetch_all.assert_called_once_with(
+            "SELECT * FROM users WHERE active = :active", {"active": True}
+        )
+        assert len(result) == 2
+
+    @pytest.mark.asyncio
+    async def test_fetch_all_empty(self, service, mock_db):
+        mock_db.fetch_all.return_value = []
+        result = await service._fetch_all("SELECT * FROM empty_table")
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_fetch_all_no_params(self, service, mock_db):
+        mock_db.fetch_all.return_value = [{"id": 1}]
+        await service._fetch_all("SELECT * FROM users")
+        mock_db.fetch_all.assert_called_once_with("SELECT * FROM users", None)
+
+    @pytest.mark.asyncio
+    async def test_fetch_one_returns_dict(self, service, mock_db):
+        mock_db.fetch_one.return_value = {"id": 1, "name": "alice"}
+        result = await service._fetch_one(
+            "SELECT * FROM users WHERE id = :id", {"id": 1}
+        )
+        assert result == {"id": 1, "name": "alice"}
+
+    @pytest.mark.asyncio
+    async def test_fetch_one_returns_none(self, service, mock_db):
+        mock_db.fetch_one.return_value = None
+        result = await service._fetch_one(
+            "SELECT * FROM users WHERE id = :id", {"id": 999}
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_execute_delegates(self, service, mock_db):
+        await service._execute(
+            "INSERT INTO users (name) VALUES (:name)", {"name": "charlie"}
+        )
+        mock_db.execute.assert_called_once_with(
+            "INSERT INTO users (name) VALUES (:name)", {"name": "charlie"}
+        )
+
+    @pytest.mark.asyncio
+    async def test_execute_query_delegates(self, service, mock_db):
+        await service._execute_query(
+            "UPDATE users SET active = :active WHERE id = :id",
+            {"active": False, "id": 5},
+        )
+        mock_db.execute.assert_called_once_with(
+            "UPDATE users SET active = :active WHERE id = :id",
+            {"active": False, "id": 5},
+        )
+
+    @pytest.mark.asyncio
+    async def test_execute_many_delegates(self, service, mock_db):
+        data = [{"name": "alice"}, {"name": "bob"}]
+        await service._execute_many("INSERT INTO users (name) VALUES (:name)", data)
+        mock_db.execute_many.assert_called_once_with(
+            "INSERT INTO users (name) VALUES (:name)", data
+        )
+
+
+class TestBaseServiceErrorHandling:
+    """Test that BaseService wraps database errors in ServiceError."""
+
+    @pytest.fixture
+    def failing_db(self):
+        mock = Mock(spec=NexusQLProvider)
+        mock.fetch_all = AsyncMock(side_effect=ConnectionError("DB down"))
+        mock.fetch_one = AsyncMock(side_effect=ConnectionError("DB down"))
+        mock.execute = AsyncMock(side_effect=ConnectionError("DB down"))
+        mock.execute_many = AsyncMock(side_effect=ConnectionError("DB down"))
+        return mock
+
+    @pytest.fixture
+    def service(self, failing_db):
+        return ConcreteService(failing_db)
+
+    @pytest.mark.asyncio
+    async def test_fetch_all_raises_service_error(self, service):
+        with pytest.raises(ServiceError, match="Database fetch failed"):
+            await service._fetch_all("SELECT 1")
+
+    @pytest.mark.asyncio
+    async def test_fetch_one_raises_service_error(self, service):
+        with pytest.raises(ServiceError, match="Database fetch failed"):
+            await service._fetch_one("SELECT 1")
+
+    @pytest.mark.asyncio
+    async def test_execute_raises_service_error(self, service):
+        with pytest.raises(ServiceError, match="Database execute failed"):
+            await service._execute("INSERT INTO t VALUES (1)")
+
+    @pytest.mark.asyncio
+    async def test_execute_query_raises_service_error(self, service):
+        with pytest.raises(ServiceError, match="Database operation failed"):
+            await service._execute_query("DROP TABLE t")
+
+    @pytest.mark.asyncio
+    async def test_execute_many_raises_service_error(self, service):
+        with pytest.raises(ServiceError, match="Database execute many failed"):
+            await service._execute_many("INSERT INTO t VALUES (:val)", [{"val": "x"}])
+
+    @pytest.mark.asyncio
+    async def test_error_chains_original(self, service):
+        with pytest.raises(ServiceError) as exc_info:
+            await service._fetch_all("SELECT 1")
+        assert isinstance(exc_info.value.__cause__, ConnectionError)
+
+
+class TestBaseServiceConcurrency:
+    """Test concurrent operations through BaseService."""
+
+    @pytest.fixture
+    def mock_db(self):
+        mock = Mock(spec=NexusQLProvider)
+        mock.fetch_all = AsyncMock(return_value=[{"id": 1}])
+        mock.fetch_one = AsyncMock(return_value={"id": 1})
+        mock.execute = AsyncMock()
+        return mock
+
+    @pytest.mark.asyncio
+    async def test_concurrent_fetch_all(self, mock_db):
+        service = ConcreteService(mock_db)
+        results = await asyncio.gather(
+            service._fetch_all("SELECT * FROM t1"),
+            service._fetch_all("SELECT * FROM t2"),
+            service._fetch_all("SELECT * FROM t3"),
+        )
         assert len(results) == 3
-        assert mock_database_provider.fetch_all.call_count == 3
+        assert mock_db.fetch_all.call_count == 3
 
-    def test_multiple_service_instances(self, mock_database_provider: Mock):
-        """Test that multiple service instances work independently."""
-        service1 = ConcreteService(mock_database_provider)
-        service2 = ConcreteService(mock_database_provider)
-        
-        assert service1.db == service2.db  # Same database provider
-        assert service1.test_calls != service2.test_calls  # Different instance data
-        
-        service1.test_calls.append("test1")
-        service2.test_calls.append("test2")
-        
-        assert "test1" in service1.test_calls
-        assert "test1" not in service2.test_calls
-        assert "test2" in service2.test_calls
-        assert "test2" not in service1.test_calls
-
-    @pytest.mark.asyncio
-    async def test_service_with_complex_data_types(self, mock_database_provider: Mock):
-        """Test service with complex parameter types."""
-        service = ConcreteService(mock_database_provider)
-        
-        # Test with various parameter types
-        complex_params = {
-            "dict_param": {"key": "value", "nested": {"data": 123}},
-            "list_param": [1, 2, 3, "string"],
-            "tuple_param": (1, "two", 3.0),
-            "none_param": None
-        }
-        
-        for param_name, param_value in complex_params.items():
-            await service._execute("INSERT INTO test VALUES (?)", (param_value,))
-            mock_database_provider.execute.assert_called_with("INSERT INTO test VALUES (?)", (param_value,))
-
-    @pytest.mark.asyncio
-    async def test_service_method_chaining_simulation(self, base_service: ConcreteService, mock_database_provider: Mock):
-        """Test simulation of method chaining through multiple database operations."""
-        mock_database_provider.fetch_one.return_value = (1, "test_user")
-        mock_database_provider.fetch_all.return_value = [(1, "post1"), (2, "post2")]
-        
-        # Simulate a workflow that uses multiple database operations
-        user = await base_service._fetch_one("SELECT id, name FROM users WHERE name = ?", ("test_user",))
-        assert user is not None
-        
-        user_posts = await base_service._fetch_all("SELECT id, title FROM posts WHERE user_id = ?", (user[0],))
-        assert len(user_posts) == 2
-        
-        await base_service._execute("UPDATE users SET last_accessed = NOW() WHERE id = ?", (user[0],))
-        
-        # Verify all database calls were made
-        assert mock_database_provider.fetch_one.call_count == 1
-        assert mock_database_provider.fetch_all.call_count == 1
-        assert mock_database_provider.execute.call_count == 1
+    def test_independent_instances(self, mock_db):
+        s1 = ConcreteService(mock_db)
+        s2 = ConcreteService(mock_db)
+        s1.test_calls.append("a")
+        s2.test_calls.append("b")
+        assert s1.test_calls == ["a"]
+        assert s2.test_calls == ["b"]
 
 
-class TestServiceIntegration:
-    """Integration-style tests for BaseService with more realistic scenarios."""
+class TestServiceExceptions:
+    """Test the exception hierarchy."""
 
-    class UserService(BaseService):
-        """Example user service extending BaseService."""
-        
-        async def create_user(self, username: str, email: str) -> int:
-            """Create a new user."""
-            await self._execute(
-                "INSERT INTO users (username, email) VALUES (?, ?)",
-                (username, email)
-            )
-            result = await self._fetch_one("SELECT last_insert_rowid()")
-            return result[0] if result else 0
-        
-        async def get_user(self, user_id: int) -> Optional[Dict[str, Any]]:
-            """Get user by ID."""
-            result = await self._fetch_one(
-                "SELECT id, username, email FROM users WHERE id = ?",
-                (user_id,)
-            )
-            if result:
-                return {"id": result[0], "username": result[1], "email": result[2]}
-            return None
-        
-        async def list_users(self) -> List[Dict[str, Any]]:
-            """List all users."""
-            results = await self._fetch_all("SELECT id, username, email FROM users")
-            return [
-                {"id": row[0], "username": row[1], "email": row[2]} 
-                for row in results
-            ]
+    def test_service_error_is_exception(self):
+        assert issubclass(ServiceError, Exception)
+
+    def test_validation_error_is_service_error(self):
+        assert issubclass(ValidationError, ServiceError)
+
+    def test_not_found_error_is_service_error(self):
+        assert issubclass(NotFoundError, ServiceError)
+
+    def test_authorization_error_is_service_error(self):
+        assert issubclass(AuthorizationError, ServiceError)
+
+    def test_service_error_message(self):
+        err = ServiceError("something broke")
+        assert str(err) == "something broke"
+
+    def test_validation_error_caught_as_service_error(self):
+        with pytest.raises(ServiceError):
+            raise ValidationError("bad input")
+
+    def test_not_found_error_caught_as_service_error(self):
+        with pytest.raises(ServiceError):
+            raise NotFoundError("user 42 not found")
+
+
+class TestServiceRegistry:
+    """Test the ServiceRegistry dependency injection container."""
 
     @pytest.fixture
-    def user_service(self, mock_database_provider: Mock) -> UserService:
-        """Create user service for testing."""
-        return self.UserService(mock_database_provider)
+    def registry(self):
+        return ServiceRegistry()
 
-    @pytest.mark.asyncio
-    async def test_user_service_create_user(self, user_service: UserService, mock_database_provider: Mock):
-        """Test creating user through service."""
-        mock_database_provider.fetch_one.return_value = (123,)  # Simulated last_insert_rowid
-        
-        user_id = await user_service.create_user("testuser", "test@example.com")
-        
-        assert user_id == 123
-        mock_database_provider.execute.assert_called_once_with(
-            "INSERT INTO users (username, email) VALUES (?, ?)",
-            ("testuser", "test@example.com")
-        )
-        mock_database_provider.fetch_one.assert_called_once()
+    def test_register_and_get(self, registry):
+        service = Mock()
+        registry.register("my_service", service)
+        assert registry.get("my_service") is service
 
-    @pytest.mark.asyncio
-    async def test_user_service_get_user(self, user_service: UserService, mock_database_provider: Mock):
-        """Test getting user through service."""
-        mock_database_provider.fetch_one.return_value = (1, "testuser", "test@example.com")
-        
-        user = await user_service.get_user(1)
-        
-        assert user is not None
-        assert user["id"] == 1
-        assert user["username"] == "testuser"
-        assert user["email"] == "test@example.com"
-        
-        mock_database_provider.fetch_one.assert_called_once_with(
-            "SELECT id, username, email FROM users WHERE id = ?",
-            (1,)
-        )
+    def test_get_nonexistent_raises(self, registry):
+        with pytest.raises(ServiceError, match="Service not found"):
+            registry.get("nonexistent")
 
-    @pytest.mark.asyncio
-    async def test_user_service_get_nonexistent_user(self, user_service: UserService, mock_database_provider: Mock):
-        """Test getting nonexistent user."""
-        mock_database_provider.fetch_one.return_value = None
-        
-        user = await user_service.get_user(999)
-        
-        assert user is None
+    def test_get_all(self, registry):
+        s1, s2 = Mock(), Mock()
+        registry.register("s1", s1)
+        registry.register("s2", s2)
+        all_services = registry.get_all()
+        assert all_services == {"s1": s1, "s2": s2}
 
-    @pytest.mark.asyncio
-    async def test_user_service_list_users(self, user_service: UserService, mock_database_provider: Mock):
-        """Test listing users through service."""
-        mock_database_provider.fetch_all.return_value = [
-            (1, "user1", "user1@example.com"),
-            (2, "user2", "user2@example.com"),
-            (3, "user3", "user3@example.com")
-        ]
-        
-        users = await user_service.list_users()
-        
-        assert len(users) == 3
-        assert users[0]["username"] == "user1"
-        assert users[2]["email"] == "user3@example.com"
-        
-        mock_database_provider.fetch_all.assert_called_once_with("SELECT id, username, email FROM users")
+    def test_get_all_returns_copy(self, registry):
+        registry.register("s", Mock())
+        copy = registry.get_all()
+        copy["extra"] = Mock()
+        assert "extra" not in registry.get_all()
 
-    @pytest.mark.asyncio
-    async def test_service_workflow_integration(self, user_service: UserService, mock_database_provider: Mock):
-        """Test complete service workflow."""
-        # Setup mock responses for workflow
-        mock_database_provider.fetch_one.side_effect = [
-            (1,),  # last_insert_rowid for create_user
-            (1, "newuser", "new@example.com")  # get_user response
-        ]
-        
-        # Execute workflow: create user then get user
-        user_id = await user_service.create_user("newuser", "new@example.com")
-        created_user = await user_service.get_user(user_id)
-        
-        assert user_id == 1
-        assert created_user is not None
-        assert created_user["username"] == "newuser"
-        
-        # Verify database interaction sequence
-        assert mock_database_provider.execute.call_count == 1
-        assert mock_database_provider.fetch_one.call_count == 2
+    def test_clear(self, registry):
+        registry.register("s", Mock())
+        registry.clear()
+        with pytest.raises(ServiceError):
+            registry.get("s")
+
+    def test_overwrite_registration(self, registry):
+        s1, s2 = Mock(), Mock()
+        registry.register("s", s1)
+        registry.register("s", s2)
+        assert registry.get("s") is s2
+
+    def test_global_registry_exists(self):
+        assert isinstance(service_registry, ServiceRegistry)

@@ -47,12 +47,12 @@ class UserIsolationService:
         try:
             # Get the latest app version with manifest
             query = """
-                SELECT manifest_yaml FROM app_versions 
-                WHERE app_id = $1 
-                ORDER BY created_at DESC 
+                SELECT manifest_yaml FROM app_versions
+                WHERE app_id = :app_id
+                ORDER BY created_at DESC
                 LIMIT 1
             """
-            result = await self.db.fetch_one(query, app_id)
+            result = await self.db.fetch_one(query, {"app_id": app_id})
             
             if not result or not result["manifest_yaml"]:
                 logger.warning(f"No manifest found for app {app_id}, defaulting to 'enforced' isolation (secure by default)")
@@ -119,8 +119,8 @@ class UserIsolationService:
                 user_id = data[field_column]
                 if user_id:
                     # Query for username using uuid (since we store UUIDs in user_id fields)
-                    user_query = "SELECT username, display_name FROM users WHERE uuid = $1"
-                    user_result = await self.db.fetch_one(user_query, str(user_id))
+                    user_query = "SELECT username, display_name FROM users WHERE uuid = :uuid"
+                    user_result = await self.db.fetch_one(user_query, {"uuid": str(user_id)})
                     
                     if user_result:
                         user_data = dict(user_result)
@@ -140,7 +140,7 @@ class UserIsolationService:
         return resolved_data
     
     def build_user_isolation_query(self, base_query: str, user_isolation: str, current_user_id: str, 
-                                 where_clause_exists: bool = True) -> tuple[str, list]:
+                                 where_clause_exists: bool = True) -> tuple[str, dict]:
         """
         Build a query with user isolation filtering applied.
         
@@ -151,7 +151,7 @@ class UserIsolationService:
             where_clause_exists: Whether the base query already has a WHERE clause
             
         Returns:
-            Tuple of (modified_query, additional_params)
+            Tuple of (modified_query, additional_params_dict)
         """
         if user_isolation == "enforced":
             # Add user isolation filter
@@ -159,15 +159,15 @@ class UserIsolationService:
                 # Query already has WHERE, add AND condition
                 isolation_query = base_query.replace(
                     "WHERE", "WHERE", 1  # Only replace first WHERE
-                ) + " AND data->>'user_id' = $"
+                ) + " AND data->>'user_id' = :current_user_id"
             else:
                 # Add WHERE clause
-                isolation_query = base_query + " WHERE data->>'user_id' = $"
-            
-            return isolation_query, [current_user_id]
+                isolation_query = base_query + " WHERE data->>'user_id' = :current_user_id"
+
+            return isolation_query, {"current_user_id": current_user_id}
         else:
             # No isolation
-            return base_query, []
+            return base_query, {}
     
     def get_isolation_info(self, user_isolation: str) -> Dict[str, Any]:
         """

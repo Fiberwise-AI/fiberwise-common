@@ -1,8 +1,6 @@
 """Fiberwise common utilities and models."""
 
-from .database.base import DatabaseProvider
-from .database.providers import SQLiteProvider, DuckDBProvider, create_database_provider
-from .database.factory import get_database_provider
+from .database.provider import DatabaseProvider, NexusQLProvider, create_database_provider
 from .database.manager import DatabaseManager
 # from .services.local_service import LocalService  # Commented out to avoid circular imports
 from .constants import *
@@ -17,10 +15,8 @@ from .entities.fiber_agent import FiberAgent, FiberInjectable
 __version__ = "0.1.0"
 __all__ = [
     "DatabaseProvider",
-    "SQLiteProvider", 
-    "DuckDBProvider",
+    "NexusQLProvider",
     "create_database_provider",
-    "get_database_provider",
     "DatabaseManager",
     # "LocalService",  # Commented out
     "Config",
@@ -28,7 +24,7 @@ __all__ = [
     "FiberAgent",
     "FiberInjectable",
     "validate_input",
-    "safe_json_loads", 
+    "safe_json_loads",
     "safe_json_dumps",
     "extract_agent_metadata",
     "calculate_file_checksum",

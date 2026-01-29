@@ -8,7 +8,7 @@ from typing import Optional, Dict, Any, List, Union
 from dataclasses import dataclass
 from enum import Enum
 
-from ..database.base import DatabaseProvider
+from ..database.provider import DatabaseProvider
 
 # Optional imports for provider types
 try:

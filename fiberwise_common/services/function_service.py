@@ -135,13 +135,13 @@ class FunctionService:
     async def get_function_by_name(self, app_id: str, function_name: str) -> Optional[Dict[str, Any]]:
         """Get function by name"""
         query = """
-            SELECT f.* 
+            SELECT f.*
             FROM functions f
             JOIN functions_app fa ON f.function_id = fa.function_id
-            WHERE fa.app_id = $1 AND f.name = $2
+            WHERE fa.app_id = :app_id AND f.name = :function_name
         """
         try:
-            result = await self.db.fetch_one(query, str(app_id), function_name)
+            result = await self.db.fetch_one(query, {"app_id": str(app_id), "function_name": function_name})
             return dict(result) if result else None
         except Exception as e:
             logger.error(f"Error fetching function by name {function_name}: {str(e)}")
@@ -215,11 +215,10 @@ class FunctionService:
         existing = await self.get_function_by_id(None, function_id)
         if not existing:
             return None
-        
+
         update_fields = []
-        update_values = []
-        param_index = 1
-        
+        param_values = {}
+
         # Only update fields that are provided
         field_mappings = {
             "name": "name",
@@ -228,37 +227,34 @@ class FunctionService:
             "implementation": "implementation",
             "is_async": "is_async"
         }
-        
+
         for field, db_field in field_mappings.items():
             if field in function_data:
-                update_fields.append(f"{db_field} = ${param_index}")
-                update_values.append(function_data[field])
-                param_index += 1
-        
+                update_fields.append(f"{db_field} = :{db_field}")
+                param_values[db_field] = function_data[field]
+
         # Handle JSON fields separately
         if "input_schema" in function_data:
-            update_fields.append(f"input_schema = ${param_index}")
-            update_values.append(json.dumps(function_data["input_schema"]))
-            param_index += 1
-        
+            update_fields.append("input_schema = :input_schema")
+            param_values["input_schema"] = json.dumps(function_data["input_schema"])
+
         if "output_schema" in function_data:
-            update_fields.append(f"output_schema = ${param_index}")
-            update_values.append(json.dumps(function_data["output_schema"]))
-            param_index += 1
-        
+            update_fields.append("output_schema = :output_schema")
+            param_values["output_schema"] = json.dumps(function_data["output_schema"])
+
         # Always update updated_at
         update_fields.append("updated_at = NOW()")
-        
+
         query = f"""
         UPDATE functions
         SET {", ".join(update_fields)}
-        WHERE function_id = ${param_index}
+        WHERE function_id = :function_id
         RETURNING *
         """
-        update_values.append(function_id)
-        
+        param_values["function_id"] = function_id
+
         try:
-            result = await self.db.fetch_one(query, *update_values)
+            result = await self.db.fetch_one(query, param_values)
             return dict(result) if result else None
         except Exception as e:
             logger.error(f"Error updating function {function_id}: {str(e)}")
@@ -745,13 +741,13 @@ async def run(input_data):
                    f.name as function_name, f.function_type
             FROM function_code fc
             JOIN functions f ON fc.function_id = f.function_id
-            WHERE fc.function_id = $1 AND fc.is_active = 1 AND fc.implementation_type = 'file'
+            WHERE fc.function_id = :function_id AND fc.is_active = 1 AND fc.implementation_type = 'file'
             ORDER BY fc.created_at DESC
             LIMIT 1
         """
-        
+
         try:
-            function_impl = await self.db.fetch_one(query, function_id)
+            function_impl = await self.db.fetch_one(query, {"function_id": function_id})
             
             if not function_impl:
                 raise ValueError(f"No active implementation found for function {function_id}")
@@ -764,20 +760,16 @@ async def run(input_data):
             INSERT INTO function_executions (
                 execution_id, function_id, input_data, status, started_at, created_by
             ) VALUES (
-                $1, $2, $3::jsonb, $4, NOW(), $5
+                :execution_id, :function_id, :input_data::jsonb, :status, NOW(), :created_by
             ) RETURNING *
             """
-            
+
             created_by = user.id if user else None
             serialized_input = json.dumps(input_data)
-            
+
             execution = await self.db.fetch_one(
-                exec_query, 
-                execution_id,
-                function_id,
-                serialized_input,
-                "running",
-                created_by
+                exec_query,
+                {"execution_id": execution_id, "function_id": function_id, "input_data": serialized_input, "status": "running", "created_by": created_by}
             )
                         
             implementation_path = impl_data["implementation_path"]
@@ -1162,22 +1154,13 @@ async def run(input_data):
                 # Lookup organization_id from app_installations table
                 try:
                     query = """
-                        SELECT ai.organization_id 
+                        SELECT ai.organization_id
                         FROM app_installations ai
-                        WHERE ai.app_id = $1 AND ai.user_id = $2 
+                        WHERE ai.app_id = :app_id AND ai.user_id = :user_id
                         AND ai.status = 'active'
                         LIMIT 1
                     """
-                    from fiberwise_common.database.query_adapter import create_query_adapter, ParameterStyle
-                    
-                    # Convert query for current database type
-                    db_type = getattr(self.db, 'provider_type', 'sqlite')
-                    query_adapter = create_query_adapter(db_type)
-                    converted_query, converted_params = query_adapter.adapt_query_and_params(
-                        query, (str(app_id), user_id), ParameterStyle.POSTGRESQL
-                    )
-                    
-                    result = await self.db.fetch_one(converted_query, *converted_params)
+                    result = await self.db.fetch_one(query, {"app_id": str(app_id), "user_id": user_id})
                     if result:
                         organization_id = result['organization_id']
                         logger.info(f"DEBUG: Found organization_id={organization_id} from app installation")

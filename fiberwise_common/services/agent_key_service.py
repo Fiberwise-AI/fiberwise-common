@@ -10,7 +10,6 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, List
 
 from .base_service import BaseService
-from ..database.query_adapter import QueryAdapter, ParameterStyle
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +18,6 @@ class AgentKeyService(BaseService):
     
     def __init__(self, db_provider):
         super().__init__(db_provider)
-        self.query_adapter = QueryAdapter(ParameterStyle.SQLITE)
 
     async def create_agent_key(
         self,
@@ -61,12 +59,12 @@ class AgentKeyService(BaseService):
             # Auto-resolve organization_id from user if not provided
             if not organization_id and created_by:
                 org_query = """
-                    SELECT organization_id FROM organization_members 
-                    WHERE user_id = $1 AND status = 'active'
-                    ORDER BY role = 'owner' DESC, role = 'admin' DESC 
+                    SELECT organization_id FROM organization_members
+                    WHERE user_id = :user_id AND status = 'active'
+                    ORDER BY role = 'owner' DESC, role = 'admin' DESC
                     LIMIT 1
                 """
-                org_result = await self._fetch_one(org_query, (created_by,))
+                org_result = await self._fetch_one(org_query, {"user_id": created_by})
                 if org_result:
                     organization_id = org_result['organization_id']
                     logger.info(f"🏢 Auto-resolved organization {organization_id} for user {created_by}")
@@ -92,31 +90,55 @@ class AgentKeyService(BaseService):
             if hasattr(self.db, 'db_type') and self.db.db_type == 'postgresql':
                 query = """
                     INSERT INTO agent_api_keys (
-                        key_id, key_value, app_id, agent_id, description, 
+                        key_id, key_value, app_id, agent_id, description,
                         scopes, expiration, resource_pattern, created_by, metadata, organization_id
                     ) VALUES (
-                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+                        :key_id, :key_value, :app_id, :agent_id, :description,
+                        :scopes, :expiration, :resource_pattern, :created_by, :metadata, :organization_id
                     ) RETURNING key_value
                 """
                 result = await self.db.fetch_val(
-                    query, 
-                    key_id, key_value, app_id, agent_id, description,
-                    scopes, expiration, resource_pattern, created_by, metadata_json, organization_id
+                    query,
+                    {
+                        "key_id": key_id,
+                        "key_value": key_value,
+                        "app_id": app_id,
+                        "agent_id": agent_id,
+                        "description": description,
+                        "scopes": scopes,
+                        "expiration": expiration,
+                        "resource_pattern": resource_pattern,
+                        "created_by": created_by,
+                        "metadata": metadata_json,
+                        "organization_id": organization_id
+                    }
                 )
             else:
                 # SQLite syntax
                 query = """
                     INSERT INTO agent_api_keys (
-                        key_id, key_value, app_id, agent_id, description, 
+                        key_id, key_value, app_id, agent_id, description,
                         scopes, expiration, resource_pattern, created_by, metadata, organization_id
                     ) VALUES (
-                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                        :key_id, :key_value, :app_id, :agent_id, :description,
+                        :scopes, :expiration, :resource_pattern, :created_by, :metadata, :organization_id
                     )
                 """
                 await self._execute_query(
-                    query, 
-                    (key_id, key_value, app_id, agent_id, description,
-                     json.dumps(scopes), expiration.isoformat(), resource_pattern, created_by, metadata_json, organization_id)
+                    query,
+                    {
+                        "key_id": key_id,
+                        "key_value": key_value,
+                        "app_id": app_id,
+                        "agent_id": agent_id,
+                        "description": description,
+                        "scopes": json.dumps(scopes),
+                        "expiration": expiration.isoformat(),
+                        "resource_pattern": resource_pattern,
+                        "created_by": created_by,
+                        "metadata": metadata_json,
+                        "organization_id": organization_id
+                    }
                 )
                 result = key_value
             
@@ -144,25 +166,25 @@ class AgentKeyService(BaseService):
             # Handle both SQLite and PostgreSQL syntax
             if hasattr(self.db, 'db_type') and self.db.db_type == 'postgresql':
                 query = """
-                    SELECT 
+                    SELECT
                         key_id, app_id, agent_id, organization_id, scopes, expiration,
                         resource_pattern, created_by
                     FROM agent_api_keys
-                    WHERE key_value = $1 AND is_active = true AND 
+                    WHERE key_value = :key_value AND is_active = true AND
                         (expiration IS NULL OR expiration > NOW())
                 """
-                result = await self._fetch_one(query, (agent_key,))
+                result = await self._fetch_one(query, {"key_value": agent_key})
             else:
                 # SQLite syntax
                 query = """
-                    SELECT 
+                    SELECT
                         key_id, app_id, agent_id, organization_id, scopes, expiration,
                         resource_pattern, created_by
                     FROM agent_api_keys
-                    WHERE key_value = ? AND is_active = 1 AND 
+                    WHERE key_value = :key_value AND is_active = 1 AND
                         (expiration IS NULL OR datetime(expiration) > datetime('now'))
                 """
-                result = await self._fetch_one(query, (agent_key,))
+                result = await self._fetch_one(query, {"key_value": agent_key})
             
             if not result:
                 logger.warning(f"Agent API key not found or inactive/expired: {agent_key[:10]}...")
@@ -207,18 +229,18 @@ class AgentKeyService(BaseService):
                 query = """
                     UPDATE agent_api_keys
                     SET is_active = false, revoked_at = NOW()
-                    WHERE key_id = $1
+                    WHERE key_id = :key_id
                     RETURNING key_id
                 """
-                result = await self.db.fetch_val(query, key_id)
+                result = await self.db.fetch_val(query, {"key_id": key_id})
             else:
                 # SQLite syntax
                 query = """
                     UPDATE agent_api_keys
                     SET is_active = 0, revoked_at = datetime('now')
-                    WHERE key_id = ?
+                    WHERE key_id = :key_id
                 """
-                await self._execute_query(query, (key_id,))
+                await self._execute_query(query, {"key_id": key_id})
                 result = key_id
             
             success = result is not None
@@ -253,40 +275,40 @@ class AgentKeyService(BaseService):
         """
         try:
             filters = []
-            params = []
-            
+            params = {}
+
             # Build WHERE clause with filters
             if app_id:
-                filters.append("app_id = ?")
-                params.append(app_id)
-                
+                filters.append("app_id = :app_id")
+                params["app_id"] = app_id
+
             if agent_id:
-                filters.append("agent_id = ?")
-                params.append(agent_id)
-                
+                filters.append("agent_id = :agent_id")
+                params["agent_id"] = agent_id
+
             if created_by:
-                filters.append("created_by = ?")
-                params.append(created_by)
-                
+                filters.append("created_by = :created_by")
+                params["created_by"] = created_by
+
             if not include_inactive:
                 filters.append("is_active = 1" if not (hasattr(self.db, 'db_type') and self.db.db_type == 'postgresql') else "is_active = true")
-                
+
             # Construct query
             query = """
-                SELECT 
+                SELECT
                     key_id, app_id, agent_id, organization_id, description, scopes,
-                    expiration, resource_pattern, is_active, 
+                    expiration, resource_pattern, is_active,
                     created_at, revoked_at, created_by
                 FROM agent_api_keys
             """
-            
+
             if filters:
                 query += " WHERE " + " AND ".join(filters)
-                
+
             query += " ORDER BY created_at DESC"
-            
+
             # Execute query
-            results = await self._fetch_all(query, tuple(params))
+            results = await self._fetch_all(query, params)
             
             # Convert to list of dictionaries and parse JSON fields
             keys = []

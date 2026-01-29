@@ -61,10 +61,10 @@ class ApiKeyService(BaseService):
         """Retrieve all API keys for a specific user."""
         query = """
             SELECT id, user_id, organization_id, key_prefix, name, scopes, expires_at, last_used_at, created_at
-            FROM api_keys 
-            WHERE user_id = $1
+            FROM api_keys
+            WHERE user_id = :user_id
         """
-        keys = await self.db.fetch_all(query, user_id)
+        keys = await self.db.fetch_all(query, {"user_id": user_id})
         
         # Process keys to handle JSON scopes and add user data
         processed_keys = []
@@ -102,24 +102,24 @@ class ApiKeyService(BaseService):
         # Wrap database operation in transaction
         async with self.db.transaction():
             query = """
-                INSERT INTO api_keys 
+                INSERT INTO api_keys
                 (user_id, organization_id, key_prefix, key_hash, name, scopes, expires_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                VALUES (:user_id, :organization_id, :key_prefix, :key_hash, :name, :scopes, :expires_at)
                 RETURNING id, created_at
             """
-            
-            params = (
-                user_id,
-                None,  # organization_id - can be added later if needed
-                key_prefix,
-                hashed_key,
-                key_data.name,
-                scopes_json,  # Now a JSON string that PostgreSQL can handle
-                expires_at
-            )
-            
+
+            params = {
+                "user_id": user_id,
+                "organization_id": None,  # organization_id - can be added later if needed
+                "key_prefix": key_prefix,
+                "key_hash": hashed_key,
+                "name": key_data.name,
+                "scopes": scopes_json,  # Now a JSON string that PostgreSQL can handle
+                "expires_at": expires_at
+            }
+
             # Use fetch_one instead of fetch to get a single record as a mapping
-            result = await self.db.fetch_one(query, *params)
+            result = await self.db.fetch_one(query, params)
             if not result:
                 raise RuntimeError("Failed to create API key")
         
@@ -150,40 +150,37 @@ class ApiKeyService(BaseService):
         """Update an API key's name or scopes."""
         async with self.db.transaction():
             # Check if key exists and belongs to the user
-            query = "SELECT * FROM api_keys WHERE id = $1 AND user_id = $2"
-            key = await self.db.fetch_one(query, key_id, user_id)
-            
+            query = "SELECT * FROM api_keys WHERE id = :key_id AND user_id = :user_id"
+            key = await self.db.fetch_one(query, {"key_id": key_id, "user_id": user_id})
+
             if not key:
                 return None
-            
+
             # Build update query dynamically
             update_fields = []
-            params = []
-            param_index = 1
-            
+            params = {}
+
             if "name" in update_data:
-                update_fields.append(f"name = ${param_index}")
-                params.append(update_data["name"])
-                param_index += 1
-            
+                update_fields.append("name = :name")
+                params["name"] = update_data["name"]
+
             if "scopes" in update_data:
-                update_fields.append(f"scopes = ${param_index}")
-                params.append(json.dumps(update_data["scopes"]))
-                param_index += 1
-            
+                update_fields.append("scopes = :scopes")
+                params["scopes"] = json.dumps(update_data["scopes"])
+
             if not update_fields:
                 return APIKeyInfo(**dict(key))
 
-            params.append(key_id)
-            
+            params["key_id"] = key_id
+
             update_query = f"""
-                UPDATE api_keys 
+                UPDATE api_keys
                 SET {', '.join(update_fields)}, updated_at = NOW()
-                WHERE id = ${param_index}
+                WHERE id = :key_id
                 RETURNING *
             """
-            
-            updated_key = await self.db.fetch_one(update_query, *params)
+
+            updated_key = await self.db.fetch_one(update_query, params)
             if updated_key:
                 key_dict = dict(updated_key)
             if isinstance(key_dict.get("scopes"), str):
@@ -197,8 +194,8 @@ class ApiKeyService(BaseService):
     async def delete_api_key(self, key_id: int, user_id: int) -> bool:
         """Delete an API key."""
         async with self.db.transaction():
-            query = "DELETE FROM api_keys WHERE id = $1 AND user_id = $2 RETURNING id"
-            result = await self.db.fetch_val(query, key_id, user_id)
+            query = "DELETE FROM api_keys WHERE id = :key_id AND user_id = :user_id RETURNING id"
+            result = await self.db.fetch_val(query, {"key_id": key_id, "user_id": user_id})
             return result is not None
 
     async def validate_api_key(self, api_key: str) -> Optional[APIKeyInfo]:
@@ -211,9 +208,9 @@ class ApiKeyService(BaseService):
         query = """
             SELECT id, user_id, organization_id, key_prefix, name, scopes, expires_at, last_used_at, created_at
             FROM api_keys
-            WHERE key_hash = $1
+            WHERE key_hash = :key_hash
         """
-        result = await self.db.fetch_one(query, hashed_key)
+        result = await self.db.fetch_one(query, {"key_hash": hashed_key})
         print(f"DEBUG VALIDATE: Query result: {result is not None}")
         if not result:
             return None
@@ -253,8 +250,8 @@ class ApiKeyService(BaseService):
         # Update last used timestamp (optional - might want to make this async)
         try:
             await self.db.execute(
-                "UPDATE api_keys SET last_used_at = $1 WHERE id = $2",
-                datetime.now(timezone.utc), result_dict["id"]
+                "UPDATE api_keys SET last_used_at = :last_used_at WHERE id = :key_id",
+                {"last_used_at": datetime.now(timezone.utc), "key_id": result_dict["id"]}
             )
         except Exception:
             # Don't fail validation if we can't update timestamp
@@ -286,12 +283,12 @@ class ApiKeyService(BaseService):
                 INSERT INTO execution_api_keys (
                     key_id, app_id, organization_id, key_value, executor_type_id, executor_id,
                     created_by, expiration
-                ) VALUES ($1, $2, $3, $4, 'pipeline', $5, $6, $7)
+                ) VALUES (:key_id, :app_id, :organization_id, :key_value, 'pipeline', :pipeline_id, :created_by, :expiration)
             """
 
             await self.db.execute(
                 insert_query,
-                key_id, app_id, organization_id, execution_key, pipeline_id, created_by, expiration
+                {"key_id": key_id, "app_id": app_id, "organization_id": organization_id, "key_value": execution_key, "pipeline_id": pipeline_id, "created_by": created_by, "expiration": expiration}
             )
 
             return execution_key
@@ -311,11 +308,11 @@ class ApiKeyService(BaseService):
             # First, try to get an existing active API key for this agent
             query = """
                 SELECT key_value FROM agent_api_keys
-                WHERE app_id = $1 AND agent_id = $2 AND is_active = 1 AND is_revoked = 0
+                WHERE app_id = :app_id AND agent_id = :agent_id AND is_active = true AND is_revoked = false
                 ORDER BY created_at DESC LIMIT 1
             """
 
-            existing_key = await self.db.fetch_val(query, app_id, agent_id)
+            existing_key = await self.db.fetch_val(query, {"app_id": app_id, "agent_id": agent_id})
             if existing_key:
                 return existing_key
 
@@ -330,13 +327,13 @@ class ApiKeyService(BaseService):
                 INSERT INTO agent_api_keys (
                     key_id, app_id, agent_id, organization_id, key_value, is_active, is_revoked,
                     created_by, created_at, updated_at
-                ) VALUES ($1, $2, $3, $4, $5, 1, 0, $6, NOW(), NOW())
+                ) VALUES (:key_id, :app_id, :agent_id, :organization_id, :key_value, true, false, :created_by, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             """
 
             key_id = str(uuid.uuid4())
 
             await self.db.execute(
-                insert_query, key_id, app_id, agent_id, organization_id, api_key, created_by
+                insert_query, {"key_id": key_id, "app_id": app_id, "agent_id": agent_id, "organization_id": organization_id, "key_value": api_key, "created_by": created_by}
             )
 
             return api_key
@@ -378,16 +375,16 @@ async def log_api_key_usage(api_key_id: int, db, endpoint: str = "unknown", meth
         # Use transaction wrapper for consistency
         async with db.transaction():
             query = """
-                INSERT INTO api_key_usage 
+                INSERT INTO api_key_usage
                 (api_key_id, endpoint, method, timestamp)
-                VALUES ($1, $2, $3, $4)
+                VALUES (:api_key_id, :endpoint, :method, :timestamp)
             """
-            await db.execute(query, api_key_id, endpoint, method, datetime.utcnow())
-            
+            await db.execute(query, {"api_key_id": api_key_id, "endpoint": endpoint, "method": method, "timestamp": datetime.utcnow()})
+
             # Also update last_used_at on the key
             await db.execute(
-                "UPDATE api_keys SET last_used_at = $1 WHERE id = $2",
-                datetime.utcnow(), api_key_id
+                "UPDATE api_keys SET last_used_at = :last_used_at WHERE id = :key_id",
+                {"last_used_at": datetime.utcnow(), "key_id": api_key_id}
             )
     except Exception as e:
         # Don't fail the main operation if logging fails

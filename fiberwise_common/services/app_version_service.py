@@ -10,7 +10,6 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
 
 from .base_service import BaseService, ServiceError, NotFoundError, ValidationError
-from ..database.query_adapter import QueryAdapter, ParameterStyle
 
 logger = logging.getLogger(__name__)
 
@@ -23,12 +22,11 @@ class AppVersionService(BaseService):
     def __init__(self, db_provider):
         """
         Initialize with a database provider.
-        
+
         Args:
             db_provider: Database provider (SQLiteProvider, PostgreSQLProvider, etc.)
         """
         super().__init__(db_provider)
-        self.query_adapter = QueryAdapter(ParameterStyle.SQLITE)
 
     async def get_app_versions(
         self,

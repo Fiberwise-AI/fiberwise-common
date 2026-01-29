@@ -1,14 +1,15 @@
 """
 Database components for FiberWise applications.
+
+Backed by NexusQL for multi-database support (PostgreSQL, SQLite, MySQL, MSSQL).
 """
 
-from .providers import DatabaseProvider, SQLiteProvider, DuckDBProvider, create_database_provider
+from .provider import NexusQLProvider, DatabaseProvider, create_database_provider
 from .manager import DatabaseManager
 
 __all__ = [
+    'NexusQLProvider',
     'DatabaseProvider',
-    'SQLiteProvider', 
-    'DuckDBProvider',
     'create_database_provider',
-    'DatabaseManager'
+    'DatabaseManager',
 ]

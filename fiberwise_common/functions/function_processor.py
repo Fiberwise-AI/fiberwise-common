@@ -268,8 +268,8 @@ async def run(input_data):
             
             # Try to get user API key first if user_id provided
             if user_id:
-                query = "SELECT api_key FROM users WHERE user_id = $1"
-                result = await self.db.fetch_one(query, user_id)
+                query = "SELECT api_key FROM users WHERE user_id = :user_id"
+                result = await self.db.fetch_one(query, {"user_id": user_id})
                 if result:
                     api_key = result.get('api_key')
             
@@ -299,8 +299,8 @@ async def run(input_data):
     
     async def _get_function(self, function_id: str) -> Optional[Dict[str, Any]]:
         """Get function details from database."""
-        query = "SELECT * FROM functions WHERE function_id = $1"
-        result = await self.db.fetch_one(query, function_id)
+        query = "SELECT * FROM functions WHERE function_id = :function_id"
+        result = await self.db.fetch_one(query, {"function_id": function_id})
         
         if not result:
             return None
@@ -320,8 +320,8 @@ async def run(input_data):
     async def list_functions(self, app_id: str = None) -> list[Dict[str, Any]]:
         """List available functions, optionally filtered by app_id."""
         if app_id:
-            query = "SELECT * FROM functions WHERE app_id = $1 ORDER BY name"
-            results = await self.db.fetch_all(query, app_id)
+            query = "SELECT * FROM functions WHERE app_id = :app_id ORDER BY name"
+            results = await self.db.fetch_all(query, {"app_id": app_id})
         else:
             query = "SELECT * FROM functions ORDER BY name"
             results = await self.db.fetch_all(query)

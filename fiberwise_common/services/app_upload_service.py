@@ -170,8 +170,8 @@ class AppUploadService:
                 logger.info(f"Generated agent_slug '{agent_slug}' from agent name")
             
             # Check if agent already exists for this app (by name OR agent_slug)
-            check_query = "SELECT agent_id FROM agents WHERE app_id = ? AND (name = ? OR agent_slug = ?)"
-            existing_agent_id = await self.db.fetch_val(check_query, str(app_id), agent_name, agent_slug)
+            check_query = "SELECT agent_id FROM agents WHERE app_id = :app_id AND (name = :name OR agent_slug = :agent_slug)"
+            existing_agent_id = await self.db.fetch_val(check_query, {"app_id": str(app_id), "name": agent_name, "agent_slug": agent_slug})
             
             # Create new agent with proper agent_type_id
             if not existing_agent_id:
@@ -183,8 +183,8 @@ class AppUploadService:
             agent_type_id = getattr(agent_manifest, 'agent_type_id', 'custom')
             
             # Verify agent_type_id exists in agent_types table
-            type_check_query = "SELECT id FROM agent_types WHERE id = ?"
-            type_exists = await self.db.fetch_val(type_check_query, agent_type_id)
+            type_check_query = "SELECT id FROM agent_types WHERE id = :agent_type_id"
+            type_exists = await self.db.fetch_val(type_check_query, {"agent_type_id": agent_type_id})
             
             if not type_exists:
                 logger.warning(f"Agent type '{agent_type_id}' not found, using 'custom'")
@@ -195,18 +195,18 @@ class AppUploadService:
                 INSERT OR REPLACE INTO agents (
                     agent_id, name, description, agent_type_id, agent_slug,
                     agent_code, is_enabled, config, created_by, updated_at, app_id, is_active
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
+                ) VALUES (:agent_id, :name, :description, :agent_type_id, :agent_slug, :agent_code, :is_enabled, :config, :created_by, CURRENT_TIMESTAMP, :app_id, :is_active)
             """
-            
+
             agent_code = getattr(agent_manifest, 'agent_code', agent_name.lower().replace(' ', '-'))
             description = getattr(agent_manifest, 'description', f"Agent for {agent_name}")
             config = getattr(agent_manifest, 'config', {})
             is_enabled = getattr(agent_manifest, 'is_enabled', True)
-            
+
             await self.db.execute(
                 upsert_query,
-                agent_id, agent_name, description, agent_type_id, agent_slug,
-                agent_code, is_enabled, json.dumps(config), user_id, str(app_id), True
+                {"agent_id": agent_id, "name": agent_name, "description": description, "agent_type_id": agent_type_id, "agent_slug": agent_slug,
+                 "agent_code": agent_code, "is_enabled": is_enabled, "config": json.dumps(config), "created_by": user_id, "app_id": str(app_id), "is_active": True}
             )
             
             logger.info(f"Created/Updated agent {agent_name} with type {agent_type_id} for app {app_id}")
@@ -231,9 +231,9 @@ class AppUploadService:
             check_query = """
                 SELECT f.function_id FROM functions f
                 JOIN functions_app fa ON f.function_id = fa.function_id
-                WHERE fa.app_id = ? AND f.name = ?
+                WHERE fa.app_id = :app_id AND f.name = :name
             """
-            existing_function = await self.db.fetch_val(check_query, str(app_id), function_name)
+            existing_function = await self.db.fetch_val(check_query, {"app_id": str(app_id), "name": function_name})
             
             if existing_function:
                 logger.info(f"Function {function_name} already exists for app {app_id}")
@@ -245,12 +245,12 @@ class AppUploadService:
             # Insert into functions table
             function_insert_query = """
                 INSERT INTO functions (
-                    function_id, name, description, function_type, implementation, 
-                    tags, input_schema, output_schema, is_async, 
+                    function_id, name, description, function_type, implementation,
+                    tags, input_schema, output_schema, is_async,
                     created_by, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ) VALUES (:function_id, :name, :description, :function_type, :implementation, :tags, :input_schema, :output_schema, :is_async, :created_by, CURRENT_TIMESTAMP)
             """
-            
+
             description = getattr(function_manifest, 'description', f"Function {function_name}")
             function_type = getattr(function_manifest, 'function_type', 'custom')
             implementation = getattr(function_manifest, 'implementation', None)
@@ -258,20 +258,20 @@ class AppUploadService:
             input_schema = getattr(function_manifest, 'input_schema', {})
             output_schema = getattr(function_manifest, 'output_schema', {})
             is_async = getattr(function_manifest, 'is_async', False)
-            
+
             await self.db.execute(
                 function_insert_query,
-                function_id, function_name, description, function_type, implementation,
-                json.dumps(tags), json.dumps(input_schema), 
-                json.dumps(output_schema), is_async, user_id
+                {"function_id": function_id, "name": function_name, "description": description, "function_type": function_type, "implementation": implementation,
+                 "tags": json.dumps(tags), "input_schema": json.dumps(input_schema),
+                 "output_schema": json.dumps(output_schema), "is_async": is_async, "created_by": user_id}
             )
             
             # Link function to app
             link_query = """
                 INSERT INTO functions_app (function_id, app_id, created_at)
-                VALUES (?, ?, CURRENT_TIMESTAMP)
+                VALUES (:function_id, :app_id, CURRENT_TIMESTAMP)
             """
-            await self.db.execute(link_query, function_id, str(app_id))
+            await self.db.execute(link_query, {"function_id": function_id, "app_id": str(app_id)})
             
             logger.info(f"Created function {function_name} for app {app_id}")
 
@@ -292,9 +292,9 @@ class AppUploadService:
             # Check if pipeline already exists for this app
             check_query = """
                 SELECT pipeline_id FROM pipelines
-                WHERE app_id = ? AND name = ?
+                WHERE app_id = :app_id AND name = :name
             """
-            existing_pipeline = await self.db.fetch_val(check_query, str(app_id), pipeline_name)
+            existing_pipeline = await self.db.fetch_val(check_query, {"app_id": str(app_id), "name": pipeline_name})
             
             if existing_pipeline:
                 logger.info(f"Pipeline {pipeline_name} already exists for app {app_id}")
@@ -308,18 +308,18 @@ class AppUploadService:
                 INSERT INTO pipelines (
                     pipeline_id, name, description, slug, version, structure,
                     created_by, app_id, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ) VALUES (:pipeline_id, :name, :description, :slug, :version, :structure, :created_by, :app_id, CURRENT_TIMESTAMP)
             """
-            
+
             description = getattr(pipeline_manifest, 'description', f"Pipeline {pipeline_name}")
             slug = getattr(pipeline_manifest, 'slug', pipeline_name.lower().replace(' ', '-'))
             version = getattr(pipeline_manifest, 'version', '1.0.0')
             structure = getattr(pipeline_manifest, 'structure', {})
-            
+
             await self.db.execute(
                 pipeline_insert_query,
-                pipeline_id, pipeline_name, description, slug, version,
-                json.dumps(structure), user_id, str(app_id)
+                {"pipeline_id": pipeline_id, "name": pipeline_name, "description": description, "slug": slug, "version": version,
+                 "structure": json.dumps(structure), "created_by": user_id, "app_id": str(app_id)}
             )
             
             logger.info(f"Created pipeline {pipeline_name} for app {app_id}")
@@ -382,8 +382,8 @@ class AppUploadService:
                     logger.info(f"No 'dist' folder found for app_version_id {app_version_id}, using root directory files")
 
                 # Load the current manifest from database (may have HTML encoding issues)
-                query = "SELECT manifest_yaml FROM app_versions WHERE app_version_id = ?"
-                manifest_yaml = await self.db.fetch_val(query, str(app_version_id))
+                query = "SELECT manifest_yaml FROM app_versions WHERE app_version_id = :app_version_id"
+                manifest_yaml = await self.db.fetch_val(query, {"app_version_id": str(app_version_id)})
                 logger.info(f"DEBUG: Read from app_versions table - manifest found: {manifest_yaml is not None}")
                 
                 db_manifest = None
@@ -546,11 +546,11 @@ class AppUploadService:
                                 
                                 # Update app_versions with raw YAML to preserve original formatting
                                 update_manifest_query = """
-                                    UPDATE app_versions 
-                                    SET manifest_yaml = $1 
-                                    WHERE app_version_id = $2
+                                    UPDATE app_versions
+                                    SET manifest_yaml = :manifest_yaml
+                                    WHERE app_version_id = :app_version_id
                                 """
-                                await self.db.execute(update_manifest_query, raw_manifest_yaml, str(app_version_id))
+                                await self.db.execute(update_manifest_query, {"manifest_yaml": raw_manifest_yaml, "app_version_id": str(app_version_id)})
                                 logger.info(f"DEBUG: Updated app_version {app_version_id} with raw YAML manifest to preserve formatting")
                             else:
                                 logger.warning(f"Bundle manifest is empty: {manifest_path}")
@@ -626,27 +626,27 @@ class AppUploadService:
                 
                 if entry_point:
                     # Check if the app's entry_point_url is null
-                    check_query = "SELECT entry_point_url FROM apps WHERE app_id = ?"
-                    current_entry_point_url = await self.db.fetch_val(check_query, str(app_id))
+                    check_query = "SELECT entry_point_url FROM apps WHERE app_id = :app_id"
+                    current_entry_point_url = await self.db.fetch_val(check_query, {"app_id": str(app_id)})
                     logger.info(f"DEBUG: Current entry_point_url in DB: {current_entry_point_url}")
                     
                     if not current_entry_point_url:
                         # Update the app record with the entry point URL
                         update_query = """
-                            UPDATE apps 
-                            SET entry_point_url = ?, updated_at = CURRENT_TIMESTAMP
-                            WHERE app_id = ?
+                            UPDATE apps
+                            SET entry_point_url = :entry_point_url, updated_at = CURRENT_TIMESTAMP
+                            WHERE app_id = :app_id
                         """
-                        await self.db.execute(update_query, entry_point, str(app_id))
+                        await self.db.execute(update_query, {"entry_point_url": entry_point, "app_id": str(app_id)})
                         logger.info(f"Updated app {app_id} with entry_point_url: {entry_point}")
                     
                     # Also update the app version's entry_point_url
                     version_update_query = """
-                        UPDATE app_versions 
-                        SET entry_point_url = ?, status = ?, updated_at = CURRENT_TIMESTAMP
-                        WHERE app_version_id = ?
+                        UPDATE app_versions
+                        SET entry_point_url = :entry_point_url, status = :status, updated_at = CURRENT_TIMESTAMP
+                        WHERE app_version_id = :app_version_id
                     """
-                    await self.db.execute(version_update_query, entry_point, final_status, str(app_version_id))
+                    await self.db.execute(version_update_query, {"entry_point_url": entry_point, "status": final_status, "app_version_id": str(app_version_id)})
                     logger.info(f"Updated app version {app_version_id} with entry_point_url: {entry_point} and status: {final_status}")
                     
             except Exception as e:
@@ -760,15 +760,15 @@ class AppUploadService:
                     
                 logger.info(f"Found agent {agent_name} with implementation path: {impl_file}")
                 
-                agent_query = "SELECT agent_id FROM agents WHERE app_id = ? AND name = ?"
-                agent_id = await self.db.fetch_val(agent_query, str(app_id), agent_name)
+                agent_query = "SELECT agent_id FROM agents WHERE app_id = :app_id AND name = :name"
+                agent_id = await self.db.fetch_val(agent_query, {"app_id": str(app_id), "name": agent_name})
                 
                 if not agent_id:
                     logger.warning(f"Agent {agent_name} not found in database for app {app_id}")
                     continue
                 
-                verification_query = "SELECT COUNT(*) FROM agents WHERE agent_id = ? AND app_id = ?"
-                agent_belongs_to_app = await self.db.fetch_val(verification_query, str(agent_id), str(app_id))
+                verification_query = "SELECT COUNT(*) FROM agents WHERE agent_id = :agent_id AND app_id = :app_id"
+                agent_belongs_to_app = await self.db.fetch_val(verification_query, {"agent_id": str(agent_id), "app_id": str(app_id)})
                 
                 if not agent_belongs_to_app:
                     logger.error(f"Agent {agent_id} does not belong to app {app_id}")
@@ -1064,22 +1064,18 @@ class AppUploadService:
             # Store function implementation in function_code table (similar to agent_code)
             query = """
                 INSERT INTO function_code (
-                    code_id, function_id, name, implementation_type, file_path, 
+                    code_id, function_id, name, implementation_type, file_path,
                     language, is_active, checksum
                 ) VALUES (
-                    ?, ?, ?, ?, ?, ?, 1, ?
+                    :code_id, :function_id, :name, :implementation_type, :file_path, :language, 1, :checksum
                 ) RETURNING code_id
             """
-            
+
             implementation_id = await self.db.fetch_val(
                 query,
-                code_id,
-                str(function_id),
-                function.name,  # Use function name for the name field
-                "file",  # implementation_type
-                rel_entity_path,
-                language,
-                checksum
+                {"code_id": code_id, "function_id": str(function_id), "name": function.name,
+                 "implementation_type": "file", "file_path": rel_entity_path,
+                 "language": language, "checksum": checksum}
             )
             
             logger.info(f"Created function implementation record: {implementation_id}")
@@ -1132,16 +1128,16 @@ class AppUploadService:
                 function_query = """
                     SELECT f.function_id FROM functions f
                     JOIN functions_app fa ON f.function_id = fa.function_id
-                    WHERE fa.app_id = ? AND f.name = ?
+                    WHERE fa.app_id = :app_id AND f.name = :name
                 """
-                function_id = await self.db.fetch_val(function_query, str(app_id), function_name)
+                function_id = await self.db.fetch_val(function_query, {"app_id": str(app_id), "name": function_name})
                 
                 if not function_id:
                     logger.warning(f"Function {function_name} not found in database for app {app_id}")
                     continue
                 
-                verification_query = "SELECT COUNT(*) FROM functions_app WHERE function_id = ? AND app_id = ?"
-                function_belongs_to_app = await self.db.fetch_val(verification_query, str(function_id), str(app_id))
+                verification_query = "SELECT COUNT(*) FROM functions_app WHERE function_id = :function_id AND app_id = :app_id"
+                function_belongs_to_app = await self.db.fetch_val(verification_query, {"function_id": str(function_id), "app_id": str(app_id)})
                 
                 if not function_belongs_to_app:
                     logger.error(f"Function {function_id} does not belong to app {app_id}")
@@ -1242,9 +1238,9 @@ class AppUploadService:
                 logger.info(f"Processing pipeline bundle: {pipeline_name}")
                 
                 # Get pipeline ID from database (it was created during deployment)
-                pipeline_query = "SELECT pipeline_id FROM pipelines WHERE name = ? AND app_id = ?"
+                pipeline_query = "SELECT pipeline_id FROM pipelines WHERE name = :name AND app_id = :app_id"
                 logger.info(f"[DEBUG] Looking for pipeline '{pipeline_name}' in app {app_id}")
-                pipeline_record = await self.db.fetch_one(pipeline_query, pipeline_name, str(app_id))
+                pipeline_record = await self.db.fetch_one(pipeline_query, {"name": pipeline_name, "app_id": str(app_id)})
                 
                 if not pipeline_record:
                     logger.error(f"Pipeline {pipeline_name} not found in database")
@@ -1257,10 +1253,10 @@ class AppUploadService:
                 all_versions_query = """
                     SELECT version_id, version, file_path, status, is_active, created_at
                     FROM pipeline_versions
-                    WHERE pipeline_id = ?
+                    WHERE pipeline_id = :pipeline_id
                     ORDER BY created_at DESC
                 """
-                all_versions = await self.db.fetch_all(all_versions_query, pipeline_id)
+                all_versions = await self.db.fetch_all(all_versions_query, {"pipeline_id": pipeline_id})
                 logger.info(f"[UPLOAD_DEBUG] Found {len(all_versions)} existing versions for pipeline {pipeline_id}")
                 for v in all_versions:
                     logger.info(f"[UPLOAD_DEBUG] Version: {v['version']}, ID: {v['version_id']}, file_path: {v['file_path']}, status: {v['status']}")
@@ -1268,12 +1264,11 @@ class AppUploadService:
                 # Look for existing version - try exact match first, then get most recent
                 existing_version_query = """
                     SELECT version_id FROM pipeline_versions
-                    WHERE pipeline_id = ? AND version = ?
+                    WHERE pipeline_id = :pipeline_id AND version = :version
                 """
                 existing_version = await self.db.fetch_one(
                     existing_version_query,
-                    pipeline_id,
-                    pipeline.version
+                    {"pipeline_id": pipeline_id, "version": pipeline.version}
                 )
 
                 # Get version from pipeline using same logic as install service
@@ -1284,8 +1279,7 @@ class AppUploadService:
                 # Try again with the corrected version
                 existing_version = await self.db.fetch_one(
                     existing_version_query,
-                    pipeline_id,
-                    pipeline_version
+                    {"pipeline_id": pipeline_id, "version": pipeline_version}
                 )
                 logger.info(f"[UPLOAD_DEBUG] Exact version match result: {existing_version}")
 
@@ -1307,13 +1301,12 @@ class AppUploadService:
 
                     update_query = """
                         UPDATE pipeline_versions
-                        SET file_path = ?, status = 'active', is_active = 1, updated_at = CURRENT_TIMESTAMP
-                        WHERE version_id = ?
+                        SET file_path = :file_path, status = 'active', is_active = 1, updated_at = CURRENT_TIMESTAMP
+                        WHERE version_id = :version_id
                     """
                     await self.db.execute(
                         update_query,
-                        pipeline_implementation_path,
-                        version_id
+                        {"file_path": pipeline_implementation_path, "version_id": version_id}
                     )
                     logger.info(f"Updated pipeline version file_path to: {pipeline_implementation_path}")
                     logger.info(f"Updated existing pipeline version {pipeline_version} with ID {version_id}")
@@ -1328,7 +1321,7 @@ class AppUploadService:
                         INSERT INTO pipeline_versions (
                             version_id, pipeline_id, version, description, config, file_path,
                             status, is_active, created_by, created_at, updated_at, manifest_yaml
-                        ) VALUES (?, ?, ?, ?, ?, ?, 'active', 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?)
+                        ) VALUES (:version_id, :pipeline_id, :version, :description, :config, :file_path, 'active', 1, :created_by, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, :manifest_yaml)
                     """
 
                     # Get fields from pipeline manifest (same as install service)
@@ -1346,14 +1339,10 @@ class AppUploadService:
 
                     await self.db.execute(
                         version_query,
-                        version_id,
-                        pipeline_id,
-                        pipeline_version,
-                        getattr(pipeline, 'description', ''),
-                        config_json,
-                        pipeline_implementation_path,
-                        user_id,
-                        manifest_yaml
+                        {"version_id": version_id, "pipeline_id": pipeline_id, "version": pipeline_version,
+                         "description": getattr(pipeline, 'description', ''), "config": config_json,
+                         "file_path": pipeline_implementation_path, "created_by": user_id,
+                         "manifest_yaml": manifest_yaml}
                     )
                     logger.info(f"Created pipeline version with file_path: {pipeline_implementation_path}")
                     logger.info(f"[UPLOAD_DEBUG] Created new pipeline version {pipeline_version} with ID {version_id} (all fields populated)")
@@ -1484,26 +1473,22 @@ class AppUploadService:
                     # Store in pipeline_code table
                     insert_query = """
                         INSERT INTO pipeline_code (
-                            pipeline_id, step_id, step_class, implementation_code, 
+                            pipeline_id, step_id, step_class, implementation_code,
                             language, version, created_by
                         ) VALUES (
-                            $1, $2, $3, $4, $5, $6, $7
-                        ) ON CONFLICT (pipeline_id, step_id, version) 
+                            :pipeline_id, :step_id, :step_class, :implementation_code, :language, :version, :created_by
+                        ) ON CONFLICT (pipeline_id, step_id, version)
                         DO UPDATE SET
                             step_class = EXCLUDED.step_class,
                             implementation_code = EXCLUDED.implementation_code,
                             updated_at = CURRENT_TIMESTAMP
                     """
-                    
+
                     await self.db.execute(
                         insert_query,
-                        pipeline_id,
-                        step_id,
-                        step_class,
-                        step_code,
-                        'python',
-                        pipeline_manifest.version,
-                        user_id
+                        {"pipeline_id": pipeline_id, "step_id": step_id, "step_class": step_class,
+                         "implementation_code": step_code, "language": "python",
+                         "version": pipeline_manifest.version, "created_by": user_id}
                     )
                     
                     logger.info(f"Stored code for pipeline step: {step_id} ({step_class})")
@@ -1568,19 +1553,15 @@ class AppUploadService:
                     code_id, function_id, name, implementation_type, content,
                     language, is_active, checksum
                 ) VALUES (
-                    ?, ?, ?, ?, ?, ?, 1, ?
+                    :code_id, :function_id, :name, :implementation_type, :content, :language, 1, :checksum
                 ) RETURNING code_id
             """
-            
+
             implementation_id = await self.db.fetch_val(
                 query,
-                code_id,
-                str(function_id),
-                function.name,
-                "content",  # implementation_type for inline
-                content,
-                language,
-                checksum
+                {"code_id": code_id, "function_id": str(function_id), "name": function.name,
+                 "implementation_type": "content", "content": content,
+                 "language": language, "checksum": checksum}
             )
             
             logger.info(f"Created inline function implementation record: {implementation_id}")
@@ -1632,9 +1613,9 @@ class AppUploadService:
             function_query = """
                 SELECT f.function_id FROM functions f
                 JOIN functions_app fa ON f.function_id = fa.function_id
-                WHERE fa.app_id = ? AND f.name = ?
+                WHERE fa.app_id = :app_id AND f.name = :name
             """
-            function_id = await self.db.fetch_val(function_query, str(app_id), function_name)
+            function_id = await self.db.fetch_val(function_query, {"app_id": str(app_id), "name": function_name})
             
             if not function_id:
                 logger.warning(f"Function {function_name} not found in database for app {app_id}")
@@ -1685,23 +1666,20 @@ class AppUploadService:
                 relative_path = os.path.relpath(function_entity_dir, settings.ENTITY_BUNDLES_DIR)
                 
                 # Delete any existing implementations for this function
-                await self.db.execute("DELETE FROM function_implementations WHERE function_id = ?", str(function_id))
+                await self.db.execute("DELETE FROM function_implementations WHERE function_id = :function_id", {"function_id": str(function_id)})
                 
                 # Create new implementation record
                 implementation_id = str(uuid4())
                 impl_query = """
-                    INSERT INTO function_implementations 
+                    INSERT INTO function_implementations
                     (implementation_id, function_id, implementation_path, language, entrypoint_file, function_name, is_active, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    VALUES (:implementation_id, :function_id, :implementation_path, :language, :entrypoint_file, :function_name, :is_active, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """
-                await self.db.execute(impl_query, 
-                    implementation_id, 
-                    str(function_id), 
-                    relative_path, 
-                    "python", 
-                    filename, 
-                    "run", 
-                    1
+                await self.db.execute(impl_query,
+                    {"implementation_id": implementation_id, "function_id": str(function_id),
+                     "implementation_path": relative_path, "language": "python",
+                     "entrypoint_file": filename, "function_name": "run",
+                     "is_active": 1}
                 )
                 
                 logger.info(f"Deployed function {function_name} to {target_file_path}")
