@@ -28,7 +28,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python3.11 -m pip install --user -e ".[test]"
+          python3.11 -m pip install --user ".[test]"
           python3.11 -m pip install --user pytest pytest-asyncio pytest-cov bcrypt
 
       - name: Run unit tests
