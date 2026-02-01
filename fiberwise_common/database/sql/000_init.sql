@@ -208,6 +208,30 @@ CREATE TABLE IF NOT EXISTS app_model_items (
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Organizations table (for multi-tenancy) - must be before tables that reference it
+CREATE TABLE IF NOT EXISTS organizations (
+    id INTEGER PRIMARY KEY,
+    uuid TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    display_name TEXT,
+    description TEXT,
+    slug TEXT NOT NULL UNIQUE,
+    website TEXT,
+    logo_url TEXT,
+    billing_email TEXT,
+    settings TEXT DEFAULT '{}', -- JSON for organization settings
+    subscription_tier TEXT DEFAULT 'free', -- free, starter, pro, enterprise
+    max_users INTEGER DEFAULT 5,
+    max_apps INTEGER DEFAULT 10,
+    max_storage_gb INTEGER DEFAULT 1,
+    is_active BOOLEAN DEFAULT true,
+    is_verified BOOLEAN DEFAULT false,
+    created_by INTEGER,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (created_by) REFERENCES users(id)
+);
+
 -- Agent Activations (Web platform-specific, more comprehensive)
 CREATE TABLE IF NOT EXISTS agent_activations (
     activation_id TEXT PRIMARY KEY,
@@ -326,7 +350,7 @@ CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 -- Apps table indexes
 CREATE INDEX IF NOT EXISTS idx_apps_creator ON apps(creator_user_id);
 CREATE INDEX IF NOT EXISTS idx_apps_slug ON apps(app_slug);
-CREATE INDEX IF NOT EXISTS idx_apps_featured ON apps(is_featured) WHERE is_featured = 1;
+CREATE INDEX IF NOT EXISTS idx_apps_featured ON apps(is_featured);
 CREATE INDEX IF NOT EXISTS idx_apps_marketplace_status ON apps(marketplace_status);
 
 -- App versions indexes
@@ -344,7 +368,7 @@ CREATE INDEX IF NOT EXISTS idx_agent_activations_agent_id ON agent_activations(a
 CREATE INDEX IF NOT EXISTS idx_agent_activations_status ON agent_activations(status);
 CREATE INDEX IF NOT EXISTS idx_agent_activations_started_at ON agent_activations(started_at);
 CREATE INDEX IF NOT EXISTS idx_agent_activations_organization_id ON agent_activations(organization_id);
-CREATE INDEX IF NOT EXISTS idx_agent_activations_dependencies ON agent_activations(dependencies) WHERE dependencies IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_agent_activations_dependencies ON agent_activations(dependencies);
 
 -- Agent table indexes
 CREATE INDEX IF NOT EXISTS idx_agents_checksum ON agents(checksum);
@@ -352,7 +376,7 @@ CREATE INDEX IF NOT EXISTS idx_agents_agent_type_id ON agents(agent_type_id);
 CREATE INDEX IF NOT EXISTS idx_agents_slug ON agents(agent_slug);
 
 -- OAuth authenticators indexes
-CREATE INDEX IF NOT EXISTS idx_oauth_authenticators_active ON oauth_authenticators(is_active) WHERE is_active = 1;
+CREATE INDEX IF NOT EXISTS idx_oauth_authenticators_active ON oauth_authenticators(is_active);
 CREATE INDEX IF NOT EXISTS idx_oauth_authenticators_app_id ON oauth_authenticators(app_id);
 
 -- OAuth sessions indexes
@@ -363,24 +387,18 @@ CREATE INDEX IF NOT EXISTS idx_oauth_sessions_state ON oauth_sessions(state_toke
 CREATE INDEX IF NOT EXISTS idx_oauth_token_grants_user_id ON oauth_token_grants(user_id);
 CREATE INDEX IF NOT EXISTS idx_oauth_token_grants_authenticator_id ON oauth_token_grants(authenticator_id);
 CREATE INDEX IF NOT EXISTS idx_oauth_token_grants_expires_at ON oauth_token_grants(expires_at);
-CREATE INDEX IF NOT EXISTS idx_oauth_token_grants_is_revoked ON oauth_token_grants(is_revoked) WHERE is_revoked = 0;
+CREATE INDEX IF NOT EXISTS idx_oauth_token_grants_is_revoked ON oauth_token_grants(is_revoked);
 
 -- OAuth user app authentications indexes
 CREATE INDEX IF NOT EXISTS idx_user_app_oauth_authentications_user_id ON user_app_oauth_authentications(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_app_oauth_authentications_app_id ON user_app_oauth_authentications(app_id);
 CREATE INDEX IF NOT EXISTS idx_user_app_oauth_authentications_authenticator_id ON user_app_oauth_authentications(authenticator_id);
-CREATE INDEX IF NOT EXISTS idx_user_app_oauth_authentications_is_active ON user_app_oauth_authentications(is_active) WHERE is_active = 1;
+CREATE INDEX IF NOT EXISTS idx_user_app_oauth_authentications_is_active ON user_app_oauth_authentications(is_active);
 
 -- LLM providers indexes
 CREATE INDEX IF NOT EXISTS idx_llm_providers_type ON llm_providers(provider_type);
-CREATE INDEX IF NOT EXISTS idx_llm_providers_active ON llm_providers(is_active) WHERE is_active = 1;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_llm_providers_default ON llm_providers(is_default) WHERE is_default = 1;
-
--- User providers indexes
-CREATE INDEX IF NOT EXISTS idx_user_providers_user_id ON user_providers(user_id);
-CREATE INDEX IF NOT EXISTS idx_user_providers_provider_type ON user_providers(provider_type);
-CREATE INDEX IF NOT EXISTS idx_user_providers_active ON user_providers(is_active) WHERE is_active = 1;
-
+CREATE INDEX IF NOT EXISTS idx_llm_providers_active ON llm_providers(is_active);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_llm_providers_default ON llm_providers(is_default);
 
 -- Insert default agent types
 INSERT INTO agent_types (id, name, description, capabilities, default_config, is_system, is_enabled) VALUES ('llm', 'LLM', 'Large Language Model agents for chat and text generation', '{}', '{}', true, true) ON CONFLICT (id) DO NOTHING;
@@ -406,30 +424,6 @@ CREATE INDEX IF NOT EXISTS idx_fields_model ON fields(model_id);
 CREATE INDEX IF NOT EXISTS idx_fields_related_model ON fields(related_model_id);
 CREATE INDEX IF NOT EXISTS idx_app_model_items_model ON app_model_items(app_id, model_id);
 CREATE INDEX IF NOT EXISTS idx_app_model_items_owner ON app_model_items(created_by);
-
--- Organizations table (for multi-tenancy)
-CREATE TABLE IF NOT EXISTS organizations (
-    id INTEGER PRIMARY KEY,
-    uuid TEXT NOT NULL UNIQUE,
-    name TEXT NOT NULL,
-    display_name TEXT,
-    description TEXT,
-    slug TEXT NOT NULL UNIQUE,
-    website TEXT,
-    logo_url TEXT,
-    billing_email TEXT,
-    settings TEXT DEFAULT '{}', -- JSON for organization settings
-    subscription_tier TEXT DEFAULT 'free', -- free, starter, pro, enterprise
-    max_users INTEGER DEFAULT 5,
-    max_apps INTEGER DEFAULT 10,
-    max_storage_gb INTEGER DEFAULT 1,
-    is_active BOOLEAN DEFAULT true,
-    is_verified BOOLEAN DEFAULT false,
-    created_by INTEGER,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (created_by) REFERENCES users(id)
-);
 
 -- Organization Members table (many-to-many between users and organizations)
 CREATE TABLE IF NOT EXISTS organization_members (
@@ -474,8 +468,8 @@ CREATE INDEX IF NOT EXISTS idx_agent_api_keys_organization_id ON agent_api_keys(
 CREATE INDEX IF NOT EXISTS idx_agent_api_keys_agent_id ON agent_api_keys(agent_id);
 CREATE INDEX IF NOT EXISTS idx_agent_api_keys_key_value ON agent_api_keys(key_value);
 CREATE INDEX IF NOT EXISTS idx_agent_api_keys_expiration ON agent_api_keys(expiration);
-CREATE INDEX IF NOT EXISTS idx_agent_api_keys_active ON agent_api_keys(is_active) WHERE is_active = 1;
-CREATE INDEX IF NOT EXISTS idx_agent_api_keys_revoked ON agent_api_keys(is_revoked) WHERE is_revoked = 0;
+CREATE INDEX IF NOT EXISTS idx_agent_api_keys_active ON agent_api_keys(is_active);
+CREATE INDEX IF NOT EXISTS idx_agent_api_keys_revoked ON agent_api_keys(is_revoked);
 
 -- Teams table (for organizing users within organizations)
 CREATE TABLE IF NOT EXISTS teams (
@@ -1154,7 +1148,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
 CREATE INDEX IF NOT EXISTS idx_organizations_uuid ON organizations(uuid);
 CREATE INDEX IF NOT EXISTS idx_organizations_slug ON organizations(slug);
 CREATE INDEX IF NOT EXISTS idx_organizations_created_by ON organizations(created_by);
-CREATE INDEX IF NOT EXISTS idx_organizations_active ON organizations(is_active) WHERE is_active = 1;
+CREATE INDEX IF NOT EXISTS idx_organizations_active ON organizations(is_active);
 
 -- Organization members indexes
 CREATE INDEX IF NOT EXISTS idx_organization_members_org_id ON organization_members(organization_id);
@@ -1166,7 +1160,7 @@ CREATE INDEX IF NOT EXISTS idx_organization_members_status ON organization_membe
 CREATE INDEX IF NOT EXISTS idx_teams_uuid ON teams(uuid);
 CREATE INDEX IF NOT EXISTS idx_teams_organization_id ON teams(organization_id);
 CREATE INDEX IF NOT EXISTS idx_teams_created_by ON teams(created_by);
-CREATE INDEX IF NOT EXISTS idx_teams_default ON teams(is_default) WHERE is_default = 1;
+CREATE INDEX IF NOT EXISTS idx_teams_default ON teams(is_default);
 
 -- Team members indexes
 CREATE INDEX IF NOT EXISTS idx_team_members_team_id ON team_members(team_id);
@@ -1210,9 +1204,9 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_identity_providers_uuid ON identity_providers(uuid);
 CREATE INDEX IF NOT EXISTS idx_identity_providers_type ON identity_providers(provider_type);
 CREATE INDEX IF NOT EXISTS idx_identity_providers_org_id ON identity_providers(organization_id);
-CREATE INDEX IF NOT EXISTS idx_identity_providers_enabled ON identity_providers(is_enabled) WHERE is_enabled = 1;
-CREATE INDEX IF NOT EXISTS idx_identity_providers_system_default ON identity_providers(is_system_default) WHERE is_system_default = 1;
-CREATE INDEX IF NOT EXISTS idx_identity_providers_org_default ON identity_providers(is_org_default, organization_id) WHERE is_org_default = 1;
+CREATE INDEX IF NOT EXISTS idx_identity_providers_enabled ON identity_providers(is_enabled);
+CREATE INDEX IF NOT EXISTS idx_identity_providers_system_default ON identity_providers(is_system_default);
+CREATE INDEX IF NOT EXISTS idx_identity_providers_org_default ON identity_providers(is_org_default, organization_id);
 
 -- Identity provider groups indexes
 CREATE INDEX IF NOT EXISTS idx_identity_provider_groups_provider_id ON identity_provider_groups(identity_provider_id);
@@ -1248,7 +1242,7 @@ CREATE INDEX IF NOT EXISTS idx_usage_quotas_org_id ON usage_quotas(organization_
 CREATE INDEX IF NOT EXISTS idx_usage_quotas_user_id ON usage_quotas(user_id);
 CREATE INDEX IF NOT EXISTS idx_usage_quotas_team_id ON usage_quotas(team_id);
 CREATE INDEX IF NOT EXISTS idx_usage_quotas_resource_type ON usage_quotas(resource_type);
-CREATE INDEX IF NOT EXISTS idx_usage_quotas_active ON usage_quotas(is_active) WHERE is_active = 1;
+CREATE INDEX IF NOT EXISTS idx_usage_quotas_active ON usage_quotas(is_active);
 
 -- Usage aggregations indexes
 CREATE INDEX IF NOT EXISTS idx_usage_aggregations_org_id ON usage_aggregations(organization_id);
@@ -1262,7 +1256,7 @@ CREATE INDEX IF NOT EXISTS idx_rate_limits_org_id ON rate_limits(organization_id
 CREATE INDEX IF NOT EXISTS idx_rate_limits_user_id ON rate_limits(user_id);
 CREATE INDEX IF NOT EXISTS idx_rate_limits_team_id ON rate_limits(team_id);
 CREATE INDEX IF NOT EXISTS idx_rate_limits_resource_type ON rate_limits(resource_type);
-CREATE INDEX IF NOT EXISTS idx_rate_limits_active ON rate_limits(is_active) WHERE is_active = 1;
+CREATE INDEX IF NOT EXISTS idx_rate_limits_active ON rate_limits(is_active);
 
 -- Billing events indexes
 CREATE INDEX IF NOT EXISTS idx_billing_events_uuid ON billing_events(uuid);
@@ -1274,22 +1268,22 @@ CREATE INDEX IF NOT EXISTS idx_billing_events_recorded_at ON billing_events(reco
 -- Security policies indexes
 CREATE INDEX IF NOT EXISTS idx_security_policies_org_id ON security_policies(organization_id);
 CREATE INDEX IF NOT EXISTS idx_security_policies_type ON security_policies(policy_type);
-CREATE INDEX IF NOT EXISTS idx_security_policies_enforced ON security_policies(is_enforced) WHERE is_enforced = 1;
+CREATE INDEX IF NOT EXISTS idx_security_policies_enforced ON security_policies(is_enforced);
 
 -- IP restrictions indexes
 CREATE INDEX IF NOT EXISTS idx_ip_restrictions_org_id ON ip_restrictions(organization_id);
-CREATE INDEX IF NOT EXISTS idx_ip_restrictions_active ON ip_restrictions(is_active) WHERE is_active = 1;
+CREATE INDEX IF NOT EXISTS idx_ip_restrictions_active ON ip_restrictions(is_active);
 CREATE INDEX IF NOT EXISTS idx_ip_restrictions_ip_address ON ip_restrictions(ip_address);
 
 -- MFA settings indexes
 CREATE INDEX IF NOT EXISTS idx_mfa_settings_user_id ON mfa_settings(user_id);
-CREATE INDEX IF NOT EXISTS idx_mfa_settings_enabled ON mfa_settings(is_enabled) WHERE is_enabled = 1;
-CREATE INDEX IF NOT EXISTS idx_mfa_settings_primary ON mfa_settings(is_primary) WHERE is_primary = 1;
+CREATE INDEX IF NOT EXISTS idx_mfa_settings_enabled ON mfa_settings(is_enabled);
+CREATE INDEX IF NOT EXISTS idx_mfa_settings_primary ON mfa_settings(is_primary);
 
 -- Data retention policies indexes
 CREATE INDEX IF NOT EXISTS idx_data_retention_policies_org_id ON data_retention_policies(organization_id);
 CREATE INDEX IF NOT EXISTS idx_data_retention_policies_resource_type ON data_retention_policies(resource_type);
-CREATE INDEX IF NOT EXISTS idx_data_retention_policies_active ON data_retention_policies(is_active) WHERE is_active = 1;
+CREATE INDEX IF NOT EXISTS idx_data_retention_policies_active ON data_retention_policies(is_active);
 
 -- Compliance reports indexes
 CREATE INDEX IF NOT EXISTS idx_compliance_reports_uuid ON compliance_reports(uuid);
@@ -1300,13 +1294,13 @@ CREATE INDEX IF NOT EXISTS idx_compliance_reports_period ON compliance_reports(r
 
 -- White label settings indexes
 CREATE INDEX IF NOT EXISTS idx_white_label_settings_org_id ON white_label_settings(organization_id);
-CREATE INDEX IF NOT EXISTS idx_white_label_settings_enabled ON white_label_settings(is_enabled) WHERE is_enabled = 1;
+CREATE INDEX IF NOT EXISTS idx_white_label_settings_enabled ON white_label_settings(is_enabled);
 CREATE INDEX IF NOT EXISTS idx_white_label_settings_custom_domain ON white_label_settings(custom_domain);
 
 -- Custom fields indexes
 CREATE INDEX IF NOT EXISTS idx_custom_fields_org_id ON custom_fields(organization_id);
 CREATE INDEX IF NOT EXISTS idx_custom_fields_entity_type ON custom_fields(entity_type);
-CREATE INDEX IF NOT EXISTS idx_custom_fields_searchable ON custom_fields(is_searchable) WHERE is_searchable = 1;
+CREATE INDEX IF NOT EXISTS idx_custom_fields_searchable ON custom_fields(is_searchable);
 
 -- Custom field values indexes
 CREATE INDEX IF NOT EXISTS idx_custom_field_values_field_id ON custom_field_values(custom_field_id);
@@ -1316,18 +1310,18 @@ CREATE INDEX IF NOT EXISTS idx_custom_field_values_entity_id ON custom_field_val
 CREATE INDEX IF NOT EXISTS idx_enterprise_integrations_uuid ON enterprise_integrations(uuid);
 CREATE INDEX IF NOT EXISTS idx_enterprise_integrations_org_id ON enterprise_integrations(organization_id);
 CREATE INDEX IF NOT EXISTS idx_enterprise_integrations_type ON enterprise_integrations(integration_type);
-CREATE INDEX IF NOT EXISTS idx_enterprise_integrations_enabled ON enterprise_integrations(is_enabled) WHERE is_enabled = 1;
+CREATE INDEX IF NOT EXISTS idx_enterprise_integrations_enabled ON enterprise_integrations(is_enabled);
 
 -- Scheduled tasks indexes
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_uuid ON scheduled_tasks(uuid);
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_org_id ON scheduled_tasks(organization_id);
-CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_enabled ON scheduled_tasks(is_enabled) WHERE is_enabled = 1;
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_enabled ON scheduled_tasks(is_enabled);
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_next_run ON scheduled_tasks(next_run_at);
 
 -- API webhooks indexes
 CREATE INDEX IF NOT EXISTS idx_api_webhooks_uuid ON api_webhooks(uuid);
 CREATE INDEX IF NOT EXISTS idx_api_webhooks_org_id ON api_webhooks(organization_id);
-CREATE INDEX IF NOT EXISTS idx_api_webhooks_enabled ON api_webhooks(is_enabled) WHERE is_enabled = 1;
+CREATE INDEX IF NOT EXISTS idx_api_webhooks_enabled ON api_webhooks(is_enabled);
 
 -- Webhook deliveries indexes
 CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_webhook_id ON webhook_deliveries(webhook_id);
@@ -1386,7 +1380,7 @@ CREATE TABLE IF NOT EXISTS app_routes (
 -- Create indexes for fast route lookups
 CREATE INDEX IF NOT EXISTS idx_app_routes_app_id ON app_routes(app_id);
 CREATE INDEX IF NOT EXISTS idx_app_routes_path ON app_routes(path);
-CREATE INDEX IF NOT EXISTS idx_app_routes_active ON app_routes(is_active) WHERE is_active = 1;
+CREATE INDEX IF NOT EXISTS idx_app_routes_active ON app_routes(is_active);
 CREATE INDEX IF NOT EXISTS idx_app_routes_app_version ON app_routes(app_version_id);
 CREATE INDEX IF NOT EXISTS idx_app_routes_app_path ON app_routes(app_id, path);
 
@@ -1489,7 +1483,7 @@ CREATE TABLE IF NOT EXISTS execution_api_keys (
     expiration TEXT, -- ISO datetime string
     resource_pattern TEXT DEFAULT '*',
     metadata TEXT DEFAULT '{}', -- JSON metadata
-    is_revoked INTEGER DEFAULT 0,
+    is_revoked BOOLEAN DEFAULT false,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
@@ -1633,7 +1627,7 @@ CREATE INDEX IF NOT EXISTS idx_function_versions_status ON function_versions(sta
 CREATE INDEX IF NOT EXISTS idx_function_versions_version ON function_versions(version);
 
 CREATE INDEX IF NOT EXISTS idx_function_implementations_function_id ON function_implementations(function_id);
-CREATE INDEX IF NOT EXISTS idx_function_implementations_active ON function_implementations(is_active) WHERE is_active = 1;
+CREATE INDEX IF NOT EXISTS idx_function_implementations_active ON function_implementations(is_active);
 
 CREATE INDEX IF NOT EXISTS idx_functions_app_function_id ON functions_app(function_id);
 CREATE INDEX IF NOT EXISTS idx_functions_app_app_id ON functions_app(app_id);
@@ -1644,7 +1638,7 @@ CREATE INDEX IF NOT EXISTS idx_execution_api_keys_app_id ON execution_api_keys(a
 CREATE INDEX IF NOT EXISTS idx_execution_api_keys_organization_id ON execution_api_keys(organization_id);
 CREATE INDEX IF NOT EXISTS idx_execution_api_keys_executor ON execution_api_keys(executor_type_id, executor_id);
 CREATE INDEX IF NOT EXISTS idx_execution_api_keys_expiration ON execution_api_keys(expiration);
-CREATE INDEX IF NOT EXISTS idx_execution_api_keys_revoked ON execution_api_keys(is_revoked) WHERE is_revoked = 0;
+CREATE INDEX IF NOT EXISTS idx_execution_api_keys_revoked ON execution_api_keys(is_revoked);
 
 CREATE INDEX IF NOT EXISTS idx_pipeline_versions_pipeline_id ON pipeline_versions(pipeline_id);
 CREATE INDEX IF NOT EXISTS idx_pipeline_versions_status ON pipeline_versions(status);
@@ -1658,7 +1652,7 @@ CREATE INDEX IF NOT EXISTS idx_workflow_versions_workflow_id ON workflow_version
 CREATE INDEX IF NOT EXISTS idx_pipelines_app_id ON pipelines(app_id);
 CREATE INDEX IF NOT EXISTS idx_pipelines_slug ON pipelines(app_id, pipeline_slug);
 CREATE INDEX IF NOT EXISTS idx_pipelines_file_path ON pipelines(file_path);
-CREATE INDEX IF NOT EXISTS idx_pipelines_active ON pipelines(is_active) WHERE is_active = 1;
+CREATE INDEX IF NOT EXISTS idx_pipelines_active ON pipelines(is_active);
 CREATE INDEX IF NOT EXISTS idx_pipelines_created_by ON pipelines(created_by);
 
 CREATE INDEX IF NOT EXISTS idx_pipeline_executions_pipeline_id ON pipeline_executions(pipeline_id);
@@ -1666,7 +1660,7 @@ CREATE INDEX IF NOT EXISTS idx_pipeline_executions_status ON pipeline_executions
 CREATE INDEX IF NOT EXISTS idx_pipeline_executions_started_at ON pipeline_executions(started_at);
 CREATE INDEX IF NOT EXISTS idx_pipeline_executions_created_by ON pipeline_executions(created_by);
 -- HITL support index
-CREATE INDEX IF NOT EXISTS idx_pipeline_executions_status_waiting ON pipeline_executions(status, waiting_step_id) WHERE status = 'paused_for_input';
+CREATE INDEX IF NOT EXISTS idx_pipeline_executions_status_waiting ON pipeline_executions(status, waiting_step_id);
 
 CREATE INDEX IF NOT EXISTS idx_pipeline_step_executions_execution_id ON pipeline_step_executions(execution_id);
 CREATE INDEX IF NOT EXISTS idx_pipeline_step_executions_step_id ON pipeline_step_executions(step_id);
