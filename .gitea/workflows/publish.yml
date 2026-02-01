@@ -7,22 +7,6 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:15-alpine
-        env:
-          POSTGRES_USER: fiberwise_test
-          POSTGRES_PASSWORD: fiberwise_test
-          POSTGRES_DB: fiberwise_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U fiberwise_test"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    env:
-      TEST_POSTGRESQL_URL: postgresql://fiberwise_test:fiberwise_test@localhost:5432/fiberwise_test
     steps:
       - uses: actions/checkout@v4
 
@@ -34,8 +18,8 @@ jobs:
       - name: Run unit tests
         run: python3.11 -m pytest tests/unit/ -v --tb=short --no-cov
 
-      - name: Run integration tests (SQLite + PostgreSQL)
-        run: python3.11 -m pytest tests/integration/ -v --tb=short --no-cov
+      - name: Run integration tests (SQLite only — no Docker on host runner)
+        run: python3.11 -m pytest tests/integration/ -v --tb=short --no-cov -k "not postgres"
 
   publish:
     needs: test
@@ -58,5 +42,5 @@ jobs:
         env:
           TWINE_USERNAME: ${{ secrets.PKG_REGISTRY_USER }}
           TWINE_PASSWORD: ${{ secrets.PKG_REGISTRY_PASSWORD }}
-          TWINE_REPOSITORY_URL: http://localhost:3000/api/packages/fiberwise/pypi
+          TWINE_REPOSITORY_URL: http://localhost:3000/api/packages/Fiberwise-AI/pypi
         run: python3.11 -m twine upload dist/*.whl
