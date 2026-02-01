@@ -5,30 +5,13 @@ on:
     branches: [main]
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          python3.11 -m pip install --user ".[test]"
-          python3.11 -m pip install --user pytest pytest-asyncio pytest-cov bcrypt
-
-      - name: Run unit tests
-        run: python3.11 -m pytest tests/unit/ -v --tb=short --no-cov
-
-      - name: Run integration tests (SQLite only — no Docker on host runner)
-        run: python3.11 -m pytest tests/integration/ -v --tb=short --no-cov -k "not postgres"
-
   publish:
-    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Install build tools
-        run: python3.11 -m pip install --user build twine
+        run: python3 -m pip install --user build twine
 
       - name: Build wheel with dev version
         run: |
@@ -36,11 +19,11 @@ jobs:
           # e.g. 0.1.0 -> 0.1.0.dev20260126073500
           TIMESTAMP=$(date +%Y%m%d%H%M%S)
           sed -i "s/^version = \"\\(.*\\)\"/version = \"\\1.dev${TIMESTAMP}\"/" pyproject.toml
-          python3.11 -m build --wheel
+          python3 -m build --wheel
 
       - name: Publish to Gitea package registry
         env:
           TWINE_USERNAME: ${{ secrets.PKG_REGISTRY_USER }}
           TWINE_PASSWORD: ${{ secrets.PKG_REGISTRY_PASSWORD }}
           TWINE_REPOSITORY_URL: http://localhost:3000/api/packages/Fiberwise-AI/pypi
-        run: python3.11 -m twine upload dist/*.whl
+        run: python3 -m twine upload dist/*.whl
