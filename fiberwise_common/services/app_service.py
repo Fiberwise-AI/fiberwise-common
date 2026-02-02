@@ -254,10 +254,9 @@ class AppService:
     # ===== APP CREATION AND MANIFEST FUNCTIONS =====
 
     async def create_new_app(self, app_manifest, user_id: str, connection=None):
-        """Create a new application from manifest"""
-        app_id = uuid4()
+        """Create a new application from manifest."""
         conn = connection or self.db
-        
+        app_id = uuid4()
         insert_query = """
             INSERT INTO apps (
                 app_id, app_slug, name, description, version, creator_user_id, updated_at
@@ -277,7 +276,7 @@ class AppService:
                 "creator_user_id": user_id,
             }
         )
-        
+
         logger.info(f"Created new app with ID {created_app_id}")
         return created_app_id
 

@@ -190,12 +190,21 @@ class AppUploadService:
                 logger.warning(f"Agent type '{agent_type_id}' not found, using 'custom'")
                 agent_type_id = 'custom'
             
-            # Use INSERT OR REPLACE to handle both insert and update cases
+            # Upsert: insert or update on conflict (PostgreSQL-compatible)
             upsert_query = """
-                INSERT OR REPLACE INTO agents (
+                INSERT INTO agents (
                     agent_id, name, description, agent_type_id, agent_slug,
                     agent_code, is_enabled, config, created_by, updated_at, app_id, is_active
                 ) VALUES (:agent_id, :name, :description, :agent_type_id, :agent_slug, :agent_code, :is_enabled, :config, :created_by, CURRENT_TIMESTAMP, :app_id, :is_active)
+                ON CONFLICT (agent_id) DO UPDATE SET
+                    name = EXCLUDED.name,
+                    description = EXCLUDED.description,
+                    agent_type_id = EXCLUDED.agent_type_id,
+                    agent_code = EXCLUDED.agent_code,
+                    is_enabled = EXCLUDED.is_enabled,
+                    config = EXCLUDED.config,
+                    updated_at = CURRENT_TIMESTAMP,
+                    is_active = EXCLUDED.is_active
             """
 
             agent_code = getattr(agent_manifest, 'agent_code', agent_name.lower().replace(' ', '-'))

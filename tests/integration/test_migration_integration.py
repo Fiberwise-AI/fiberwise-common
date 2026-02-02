@@ -179,3 +179,53 @@ class TestMigrationIntegration:
         mgr, _ = make_manager()
         await mgr.initialize()
         assert await mgr.apply_migrations() is True
+
+    @pytest.mark.asyncio
+    async def test_real_migrations_apply_successfully(self, tmp_path):
+        """Run the actual SQL migrations from fiberwise_common/database/sql/ against SQLite."""
+        from pathlib import Path
+
+        sql_dir = Path(__file__).resolve().parents[2] / "fiberwise_common" / "database" / "sql"
+        assert sql_dir.exists(), f"SQL directory not found: {sql_dir}"
+
+        mgr = DatabaseManager(
+            f"sqlite:///{tmp_path / 'test.db'}",
+            migrations_dir=sql_dir,
+        )
+        await mgr.initialize()
+        result = await mgr.apply_migrations()
+        assert result is True, "Real migrations failed — check SQL compatibility"
+
+        # Verify key tables exist
+        for table in ["users", "organizations", "agents", "pipelines", "apps"]:
+            row = await mgr.provider.fetch_one(
+                f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table}'"
+            )
+            assert row is not None, f"Expected table '{table}' was not created"
+
+        # Verify all migration files were tracked
+        rows = await mgr.provider.fetch_all(
+            "SELECT version FROM ia_migrations ORDER BY version"
+        )
+        versions = [r["version"] for r in rows]
+        assert "000_init" in versions
+        assert "001_add_oidc_identities" in versions
+        assert "002_add_pipeline_activations_table" in versions
+
+        await mgr.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_real_migrations_idempotent(self, tmp_path):
+        """Running real migrations twice succeeds (idempotent)."""
+        from pathlib import Path
+
+        sql_dir = Path(__file__).resolve().parents[2] / "fiberwise_common" / "database" / "sql"
+
+        mgr = DatabaseManager(
+            f"sqlite:///{tmp_path / 'test.db'}",
+            migrations_dir=sql_dir,
+        )
+        await mgr.initialize()
+        assert await mgr.apply_migrations() is True
+        assert await mgr.apply_migrations() is True
+        await mgr.shutdown()

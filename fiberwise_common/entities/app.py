@@ -4,7 +4,6 @@ App schemas for the FiberWise platform.
 from pydantic import BaseModel, UUID4, Field
 from typing import List, Optional, Dict, Any
 from uuid import UUID
-from datetime import datetime
 
 
 class MarketplaceAppRead(BaseModel):
@@ -15,7 +14,7 @@ class MarketplaceAppRead(BaseModel):
     version: str
     marketplace_status: str
     creator_user_id: int
-    created_at: datetime
+    created_at: str
     publisher_name: str
     manifest_yaml: Optional[str] = None
     install_count: int = 0
@@ -50,8 +49,8 @@ class AppModelItem(BaseModel):
     model_id: UUID4
     data: Dict[str, Any]
     created_by: int 
-    created_at: datetime
-    updated_at: datetime
+    created_at: str
+    updated_at: str
     
     class Config:
         from_attributes = True
@@ -71,7 +70,7 @@ class AppInstallation(BaseModel):
     installation_id: UUID4
     app_id: UUID4
     installed_by_user_id: int
-    installed_at: datetime
+    installed_at: str
     installed_version: str
     is_active: bool
 
@@ -114,8 +113,8 @@ class ModelRead(BaseModel):
     name: str
     description: Optional[str] = None
     is_system_model: bool = False
-    created_at: datetime
-    updated_at: datetime
+    created_at: str
+    updated_at: str
     is_active: bool = True
     
     class Config:
@@ -157,8 +156,8 @@ class AppRead(BaseModel):
     creator_user_id: Optional[int] = None
     owner_id: Optional[int] = None
     organization_id: Optional[int] = None
-    created_at: datetime
-    updated_at: datetime
+    created_at: str
+    updated_at: str
     models: List[ModelRead] = []
 
     class Config:

@@ -159,10 +159,10 @@ class UserIsolationService:
                 # Query already has WHERE, add AND condition
                 isolation_query = base_query.replace(
                     "WHERE", "WHERE", 1  # Only replace first WHERE
-                ) + " AND data->>'user_id' = :current_user_id"
+                ) + " AND data::jsonb->>'user_id' = :current_user_id"
             else:
                 # Add WHERE clause
-                isolation_query = base_query + " WHERE data->>'user_id' = :current_user_id"
+                isolation_query = base_query + " WHERE data::jsonb->>'user_id' = :current_user_id"
 
             return isolation_query, {"current_user_id": current_user_id}
         else:

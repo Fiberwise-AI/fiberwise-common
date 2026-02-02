@@ -228,19 +228,11 @@ class FiberAppManager:
                 return AppOperationResult(False, f"Build failed: {build_result.message}")
             
             # Step 1: Send manifest to backend
-            print(f"[DEBUG] Sending manifest to backend: {self.api_endpoint}{INSTALL_API_PATH}")
-            response = requests.post(
-                f"{self.api_endpoint}{INSTALL_API_PATH}",
-                headers=self.headers,
-                json=validated_manifest,
-                timeout=30
-            )
-            print(f"[DEBUG] Backend response: {response.status_code}")
-            
-            if response.status_code not in (200, 201):
-                return AppOperationResult(False, f"Server error {response.status_code}: {response.text}")
-            
-            install_response = response.json()
+            deploy_result = self._deploy_manifest(validated_manifest)
+            if not deploy_result.success:
+                return deploy_result
+
+            install_response = deploy_result.data.get("response")
             print(f"[DEBUG] Install response received, processing results...")
             result = AppOperationResult(True, "Manifest processed successfully")
             result.data["install_response"] = install_response
@@ -697,6 +689,29 @@ class FiberAppManager:
             
         except Exception as e:
             return AppOperationResult(False, f"Error validating pipeline files: {e}")
+
+    def _deploy_manifest(self, validated_manifest: Dict[str, Any]) -> AppOperationResult:
+        """Send manifest to the backend API. Override this for direct service calls."""
+        try:
+            print(f"[DEBUG] Sending manifest to backend: {self.api_endpoint}{INSTALL_API_PATH}")
+            response = requests.post(
+                f"{self.api_endpoint}{INSTALL_API_PATH}",
+                headers=self.headers,
+                json=validated_manifest,
+                timeout=30
+            )
+            print(f"[DEBUG] Backend response: {response.status_code}")
+
+            if response.status_code not in (200, 201):
+                return AppOperationResult(False, f"Server error {response.status_code}: {response.text}")
+
+            result = AppOperationResult(True, "Manifest deployed successfully")
+            result.data["response"] = response.json()
+            return result
+        except requests.exceptions.Timeout:
+            return AppOperationResult(False, "Manifest deploy timed out after 30 seconds")
+        except Exception as e:
+            return AppOperationResult(False, f"Error deploying manifest: {e}")
 
     def _create_and_upload_bundle(self, app_path: Path, app_version_id: str) -> AppOperationResult:
         """Create and upload app bundle (assumes app is already built)."""
