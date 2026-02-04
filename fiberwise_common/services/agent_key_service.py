@@ -181,7 +181,7 @@ class AgentKeyService(BaseService):
                         key_id, app_id, agent_id, organization_id, scopes, expiration,
                         resource_pattern, created_by
                     FROM agent_api_keys
-                    WHERE key_value = :key_value AND is_active = 1 AND
+                    WHERE key_value = :key_value AND is_active = TRUE AND
                         (expiration IS NULL OR datetime(expiration) > datetime('now'))
                 """
                 result = await self._fetch_one(query, {"key_value": agent_key})

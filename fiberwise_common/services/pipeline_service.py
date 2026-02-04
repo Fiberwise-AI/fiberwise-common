@@ -19,10 +19,11 @@ class PipelineService(BaseService):
     Service for managing pipelines and their executions.
     """
 
-    def __init__(self, database_provider: DatabaseProvider, connection_manager: ConnectionManager):
+    def __init__(self, database_provider: DatabaseProvider, connection_manager: ConnectionManager, settings=None):
         super().__init__(database_provider)
         self.db = database_provider
         self.connection_manager = connection_manager
+        self.settings = settings
         self._injected_services = {}
 
     def _convert_db_record_to_pipeline(self, record) -> Pipeline:
@@ -52,6 +53,10 @@ class PipelineService(BaseService):
         if data.get('file_path') is None:
             data['file_path'] = ""
 
+        # Convert datetime fields to strings to avoid Pydantic parsing issues with PostgreSQL format
+        for dt_field in ['created_at', 'updated_at']:
+            if data.get(dt_field) is not None:
+                data[dt_field] = str(data[dt_field])
 
         # Let Pydantic handle the conversion and validation
         return Pipeline(**data)
@@ -256,36 +261,42 @@ class PipelineService(BaseService):
             if not pipeline:
                 raise ValueError(f"Failed to convert pipeline {pipeline_id} to Pipeline object")
             
-            # Parse pipeline definition
-            definition = pipeline.definition
-            if not definition:
-                raise ValueError(f"Pipeline {pipeline_id} missing definition")
-
-            try:
-                structure = definition if isinstance(definition, dict) else json.loads(definition)
-            except json.JSONDecodeError as e:
-                raise ValueError(f"Invalid JSON in pipeline definition: {str(e)}")
-
-            if not structure or 'steps' not in structure:
-                raise ValueError("Invalid pipeline structure - missing 'steps'")
-
-            # No service creation at pipeline level - create at runtime in steps
+            # Check execution engine
+            execution_engine = getattr(pipeline, 'execution_engine', 'fiber-default') or 'fiber-default'
 
             # Send pipeline start update
             await self._send_pipeline_update(
                 execution_id, "running",
-                f"Pipeline execution started", organization_id, str(pipeline.app_id), {"input_data": input_data}
+                f"Pipeline execution started ({execution_engine})", organization_id, str(pipeline.app_id), {"input_data": input_data}
             )
-            
-            # Execute the structured pipeline
-            result = await self._execute_structured_pipeline(
-                structure, input_data, execution_id, pipeline, self.db, user_id, organization_id
-            )
-            
+
+            if execution_engine != 'fiber-default':
+                # Route to external execution engine (e.g., ia_modules)
+                result = await self._execute_via_engine(
+                    execution_engine, pipeline, input_data, execution_id, organization_id, user_id
+                )
+            else:
+                # Legacy fiber-default execution
+                definition = pipeline.definition
+                if not definition:
+                    raise ValueError(f"Pipeline {pipeline_id} missing definition")
+
+                try:
+                    structure = definition if isinstance(definition, dict) else json.loads(definition)
+                except json.JSONDecodeError as e:
+                    raise ValueError(f"Invalid JSON in pipeline definition: {str(e)}")
+
+                if not structure or 'steps' not in structure:
+                    raise ValueError("Invalid pipeline structure - missing 'steps'")
+
+                result = await self._execute_structured_pipeline(
+                    structure, input_data, execution_id, pipeline, self.db, user_id, organization_id
+                )
+
             # Send pipeline completion update
             await self._send_pipeline_update(
                 execution_id, "completed",
-                f"Pipeline completed successfully", organization_id, str(pipeline.app_id), result.dict()
+                f"Pipeline completed successfully", organization_id, str(pipeline.app_id), result.dict() if hasattr(result, 'dict') else result
             )
             
             # Update execution record as completed
@@ -420,6 +431,149 @@ class PipelineService(BaseService):
         except Exception as e:
             logger.error(f"Error in structured pipeline execution: {str(e)}")
             raise
+
+    async def _create_fiber_app(self, pipeline: Pipeline, organization_id: int, user_id: int):
+        """Create a FiberApp instance for use in pipeline steps. Reusable across engines."""
+        try:
+            from .execution_key_service import ExecutionKeyService
+            from fiberwise_sdk import FiberWiseConfig, FiberApp
+            import os
+
+            # Create execution key service instance
+            execution_key_service = ExecutionKeyService(self.db)
+
+            execution_key_result = await execution_key_service.create_execution_key(
+                app_id=str(pipeline.app_id),
+                organization_id=organization_id,
+                executor_type_id='pipeline',
+                executor_id=str(pipeline.pipeline_id),
+                created_by=user_id,
+                expiration_minutes=60
+            )
+            execution_key = execution_key_result['key_value'] if execution_key_result else None
+            if not execution_key:
+                logger.error("Unable to obtain execution key for FiberApp")
+                return None
+
+            # Create FiberApp config
+            config_dict = {
+                'app_id': str(pipeline.app_id),
+                'api_key': execution_key,
+                'base_url': os.getenv('FIBER_API_BASE_URL', 'http://localhost:5555/api/v1'),
+                'version': '1.0.0'
+            }
+
+            if organization_id:
+                config_dict['organization_id'] = organization_id
+
+            context_config = FiberWiseConfig(config_dict)
+            fiber_app = FiberApp(context_config)
+
+            logger.info(f"✅ Created FiberApp with key: {execution_key[:10]}...")
+            return fiber_app
+
+        except Exception as e:
+            logger.error(f"Failed to create FiberApp: {e}")
+            return None
+
+    async def _execute_via_engine(self, engine_name: str, pipeline: Pipeline, input_data: dict,
+                                   execution_id: str, organization_id: int, user_id: int) -> PipelineExecutionResult:
+        """Execute pipeline via an external execution engine (e.g., ia_modules)."""
+        from fiberwise_common.execution_engines import ExecutionEngineRegistry
+        import os
+
+        engine = ExecutionEngineRegistry.get_engine(engine_name)
+
+        # Build pipeline definition — load from file if specified, else use DB definition
+        pipeline_def_file = getattr(pipeline, 'pipeline_definition_file', None)
+        working_directory = None
+        
+        if pipeline_def_file:
+            # For external pipeline definitions (ia_modules, etc), resolve to entity_bundles
+            # Get the pipeline version to find the entity bundle location
+            pipeline_version_query = """
+                SELECT version_id FROM pipeline_versions
+                WHERE pipeline_id = :pipeline_id AND status = 'active'
+                ORDER BY created_at DESC LIMIT 1
+            """
+            pv_result = await self.db.fetch_one(pipeline_version_query, {"pipeline_id": str(pipeline.pipeline_id)})
+
+            if pv_result:
+                version_id = pv_result['version_id']
+                # Construct path: ENTITY_BUNDLES_DIR/apps/{app_id}/pipeline/{pipeline_id}/{version_id}/{pipeline_def_file}
+                entity_bundles_dir = getattr(self.settings, 'ENTITY_BUNDLES_DIR', 'local_data/entity_bundles')
+                pipeline_bundle_path = os.path.join(
+                    entity_bundles_dir,
+                    'apps',
+                    str(pipeline.app_id),
+                    'pipeline',
+                    str(pipeline.pipeline_id),
+                    version_id
+                )
+                # Extract just the filename from pipeline_def_file (e.g., "pipelines/pipeline.yaml" -> "pipeline.yaml")
+                # because the extraction process copies files to the root of the bundle directory
+                pipeline_filename = os.path.basename(pipeline_def_file)
+                resolved_file_path = os.path.join(pipeline_bundle_path, pipeline_filename)
+
+                # For system apps, use the app's source directory as working directory (for custom step imports)
+                # Otherwise use the pipeline bundle path
+                app_query = "SELECT app_slug FROM apps WHERE app_id = :app_id"
+                app_result = await self.db.fetch_one(app_query, {"app_id": str(pipeline.app_id)})
+                if app_result:
+                    app_slug = app_result['app_slug']
+                    system_app_dir = f"/opt/fiberwise/system-apps/{app_slug}"
+                    if os.path.exists(system_app_dir):
+                        working_directory = system_app_dir
+                        logger.info(f"Using system app directory as working directory: {system_app_dir}")
+                    else:
+                        working_directory = pipeline_bundle_path
+                        logger.info(f"Using pipeline bundle as working directory: {pipeline_bundle_path}")
+                else:
+                    working_directory = pipeline_bundle_path
+
+                logger.info(f"Resolved pipeline definition file: {resolved_file_path}")
+            else:
+                # Fallback: try the path as-is (may work for system apps with absolute paths)
+                resolved_file_path = pipeline_def_file
+                logger.warning(f"No active pipeline version found for pipeline {pipeline.pipeline_id}, using path as-is: {pipeline_def_file}")
+
+            definition = engine.load_pipeline_definition(resolved_file_path)
+        else:
+            definition = pipeline.definition
+            if isinstance(definition, str):
+                definition = json.loads(definition)
+
+        # Create FiberApp for steps to use
+        fiber_app = await self._create_fiber_app(pipeline, organization_id, user_id)
+
+        # Build context for the engine
+        context = {
+            'db_provider': self.db,
+            'connection_manager': self.connection_manager,
+            'organization_id': organization_id,
+            'user_id': user_id,
+            'app_id': str(pipeline.app_id),
+            'execution_id': execution_id,
+            'working_directory': working_directory,
+            'fiber_app': fiber_app,  # Pass FiberApp for ia_modules steps
+        }
+
+        logger.info(f"Routing pipeline {pipeline.pipeline_id} to {engine_name} engine")
+        result = await engine.execute_pipeline(definition, input_data, context)
+
+        # Convert engine result to PipelineExecutionResult
+        from datetime import datetime
+        return PipelineExecutionResult(
+            execution_id=execution_id,
+            pipeline_id=str(pipeline.pipeline_id),
+            status="completed" if result.get('success') else "failed",
+            input_data=input_data,
+            output_data=result.get('result', {}),
+            step_results=result.get('step_results', {}),
+            created_by=user_id,
+            started_at=datetime.utcnow().isoformat() + "Z",
+            completed_at=datetime.utcnow().isoformat() + "Z"
+        )
 
     def _resolve_dynamic_parameters(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         """Resolve dynamic parameter values using template substitution."""
@@ -792,7 +946,7 @@ class PipelineService(BaseService):
             # Fallback: Get the bundle directory from the pipeline version
             version_query = """
                 SELECT file_path FROM pipeline_versions
-                WHERE pipeline_id = :pipeline_id AND is_active = 1
+                WHERE pipeline_id = :pipeline_id AND is_active = TRUE
                 ORDER BY created_at DESC LIMIT 1
             """
             version_record = await self.db.fetch_one(version_query, {"pipeline_id": str(pipeline_id)})
@@ -978,7 +1132,7 @@ class PipelineService(BaseService):
             # Get active version_id from pipeline_versions table (like agents)
             version_query = """
                 SELECT version_id FROM pipeline_versions
-                WHERE pipeline_id = :pipeline_id AND is_active = 1
+                WHERE pipeline_id = :pipeline_id AND is_active = TRUE
                 ORDER BY created_at DESC LIMIT 1
             """
             version_record = await self.db.fetch_one(version_query, {"pipeline_id": pipeline_id})

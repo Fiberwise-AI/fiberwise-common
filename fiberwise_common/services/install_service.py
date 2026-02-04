@@ -365,12 +365,18 @@ async def _create_new_pipeline(conn, pipeline_manifest: PipelineManifest, pipeli
     if definition is None:
         definition = json.dumps({})
 
+    # Get execution engine fields from manifest
+    execution_engine = getattr(pipeline_manifest, 'execution_engine', 'fiber-default') or 'fiber-default'
+    pipeline_definition_file = getattr(pipeline_manifest, 'pipeline_definition', None)
+
     # Create the pipeline record
     insert_query = """
         INSERT INTO pipelines (
-            pipeline_id, name, description, config, created_by, created_at, file_path, pipeline_slug, app_id, definition
+            pipeline_id, name, description, config, created_by, created_at, file_path, pipeline_slug, app_id, definition,
+            execution_engine, pipeline_definition_file
         ) VALUES (
-            :pipeline_id, :name, :description, :config, :created_by, CURRENT_TIMESTAMP, :file_path, :pipeline_slug, :app_id, :definition
+            :pipeline_id, :name, :description, :config, :created_by, CURRENT_TIMESTAMP, :file_path, :pipeline_slug, :app_id, :definition,
+            :execution_engine, :pipeline_definition_file
         ) RETURNING pipeline_id
     """
 
@@ -385,7 +391,9 @@ async def _create_new_pipeline(conn, pipeline_manifest: PipelineManifest, pipeli
             "file_path": file_path,
             "pipeline_slug": pipeline_slug,
             "app_id": app_id,
-            "definition": definition
+            "definition": definition,
+            "execution_engine": execution_engine,
+            "pipeline_definition_file": pipeline_definition_file
         }
     )
 
@@ -755,47 +763,73 @@ async def process_app_from_manifest(conn, manifest: UnifiedManifest, current_use
         manifest_yaml = yaml.dump(full_manifest_dict)
         logger.info(f"Stored full manifest with sections: {list(full_manifest_dict.keys())}")
 
-        # Use the app_service import function with our transaction connection
-        app_result = await import_app_from_manifest(
-            manifest=manifest,
-            current_user=current_user,
-            connection=conn
-        )
+        # Check if app already exists (this function is called for both new and existing apps)
+        check_query = "SELECT app_id FROM apps WHERE app_slug = :app_slug AND creator_user_id = :creator_user_id"
+        existing_app = await conn.fetch_one(check_query, {"app_slug": manifest.app.app_slug, "creator_user_id": current_user.id})
 
-        # Get the latest app version ID (which will be the one we just created by import_app_from_manifest)
-        latest_version_query = """
-            SELECT app_version_id, manifest_yaml
-            FROM app_versions
-            WHERE app_id = :app_id
-            ORDER BY created_at DESC LIMIT 1
-        """
-        latest_version = await conn.fetch_one(latest_version_query, {"app_id": str(app_result.app_id)})
-        version_id = str(latest_version["app_version_id"]) if latest_version else None
-        version_manifest_yaml = latest_version["manifest_yaml"] if latest_version else manifest_yaml
+        if existing_app:
+            # App exists - create a new version for it
+            logger.info(f"[UPDATE] App '{manifest.app.app_slug}' exists (app_id={existing_app['app_id']}), creating new version")
+            app_id = existing_app["app_id"]
+            app_name = manifest.app.name
+
+            # Import required functions
+            from fiberwise_common.services.app_service import AppService, _process_models_from_manifest
+
+            # Version should already be incremented by LocalFiberAppManager before building
+            # Just use the version from the manifest as-is
+            app_service = AppService(conn)
+            version_id = await app_service.create_app_version(app_id, manifest.app, str(current_user.id), conn)
+            logger.info(f"[UPDATE] Created new version {version_id} ({manifest.app.version}) for existing app {app_id}")
+
+            # Process models if they exist in the manifest
+            if hasattr(manifest.app, 'models') and manifest.app.models:
+                logger.info(f"[UPDATE] Processing {len(manifest.app.models)} models for app {app_id}")
+                await _process_models_from_manifest(conn, str(app_id), manifest.app.models)
+
+            version_manifest_yaml = manifest_yaml
+        else:
+            # New app - use the import function
+            logger.info(f"[INSTALL] Creating new app '{manifest.app.app_slug}'")
+            app_result = await import_app_from_manifest(
+                manifest=manifest,
+                current_user=current_user,
+                connection=conn
+            )
+            app_id = app_result.app_id
+            app_name = app_result.name
+
+            # Get the latest app version ID (which will be the one we just created by import_app_from_manifest)
+            latest_version_query = """
+                SELECT app_version_id, manifest_yaml
+                FROM app_versions
+                WHERE app_id = :app_id
+                ORDER BY created_at DESC LIMIT 1
+            """
+            latest_version = await conn.fetch_one(latest_version_query, {"app_id": str(app_id)})
+            version_id = str(latest_version["app_version_id"]) if latest_version else None
+            version_manifest_yaml = latest_version["manifest_yaml"] if latest_version else manifest_yaml
 
         # Extract and store routes from the manifest
-        logger.info(f"Extracting routes from manifest for app {app_result.app_id}")
+        logger.info(f"Extracting routes from manifest for app {app_id}")
         routes_success = await _extract_and_store_routes_from_manifest(
             conn,
-            str(app_result.app_id),
+            str(app_id),
             str(version_id),
             version_manifest_yaml
         )
 
         if not routes_success:
-            logger.warning(f"Failed to extract routes for app {app_result.app_id}, but continuing...")
-
-        # The version_id is the latest version
-        latest_version_id = version_id
+            logger.warning(f"Failed to extract routes for app {app_id}, but continuing...")
 
         # Return in a format consistent with other methods
         return {
-            "id": str(app_result.app_id),
+            "id": str(app_id),
             "version_id": str(version_id),
-            "latest_version_id": latest_version_id,
-            "name": app_result.name,
-            "version": app_result.version,
-            "model_count": len(getattr(app_result, 'models', [])),
+            "latest_version_id": version_id,
+            "name": app_name,
+            "version": manifest.app.version,
+            "model_count": len(getattr(manifest.app, 'models', [])),
             "status": "created"
         }
     except HTTPException as http_e:
@@ -917,7 +951,10 @@ async def process_pipeline_from_manifest(conn, pipeline_manifest: PipelineManife
         pipeline_slug = pipeline_manifest.name.lower().replace(' ', '-')
         pipeline_slug = ''.join(c for c in pipeline_slug if c.isalnum() or c == '-')
 
-        # NEW: Validate pipeline structure if it exists
+        # Determine execution engine
+        execution_engine = getattr(pipeline_manifest, 'execution_engine', 'fiber-default') or 'fiber-default'
+
+        # Build pipeline definition
         definition = None
         if hasattr(pipeline_manifest, 'structure') and pipeline_manifest.structure:
             structure = pipeline_manifest.structure
@@ -930,11 +967,17 @@ async def process_pipeline_from_manifest(conn, pipeline_manifest: PipelineManife
 
             # Store structure in database
             definition = json.dumps(structure)
+        elif execution_engine != 'fiber-default' and getattr(pipeline_manifest, 'pipeline_definition', None):
+            # Non-default engine with external pipeline definition file (e.g., ia_modules with pipeline.yaml)
+            # The definition file will be loaded at execution time by the engine
+            # Store empty definition for now; the engine reads the file directly
+            definition = json.dumps({})
+            logger.info(f"Pipeline '{pipeline_manifest.name}' uses {execution_engine} engine with definition file: {pipeline_manifest.pipeline_definition}")
         elif hasattr(pipeline_manifest, 'implementation_path') and pipeline_manifest.implementation_path:
             # Legacy support - keep existing implementation_path logic
             definition = None
         else:
-            raise ValueError("Pipeline manifest missing required 'structure' field")
+            raise ValueError("Pipeline manifest missing required 'structure' or 'pipeline_definition' field")
 
         # Check if pipeline exists
         pipeline_query = "SELECT pipeline_id FROM pipelines WHERE pipeline_slug = :pipeline_slug AND app_id = :app_id"
@@ -947,10 +990,16 @@ async def process_pipeline_from_manifest(conn, pipeline_manifest: PipelineManife
             pipeline_id = existing_pipeline["pipeline_id"]
             logger.info(f"[PIPELINE_VERSION_DEBUG] Found existing pipeline with ID {pipeline_id}")
 
-            # Update pipeline definition if we have new structure
+            # Update pipeline definition and execution engine
             if definition:
-                update_query = "UPDATE pipelines SET definition = :definition WHERE pipeline_id = :pipeline_id"
-                await conn.execute(update_query, {"definition": definition, "pipeline_id": str(pipeline_id)})
+                update_query = """UPDATE pipelines SET definition = :definition, execution_engine = :execution_engine,
+                    pipeline_definition_file = :pipeline_definition_file WHERE pipeline_id = :pipeline_id"""
+                await conn.execute(update_query, {
+                    "definition": definition,
+                    "execution_engine": execution_engine,
+                    "pipeline_definition_file": getattr(pipeline_manifest, 'pipeline_definition', None),
+                    "pipeline_id": str(pipeline_id)
+                })
                 logger.info(f"[PIPELINE_VERSION_DEBUG] Updated pipeline definition for {pipeline_id}")
 
             # Check if we already have a version for this pipeline from this deployment

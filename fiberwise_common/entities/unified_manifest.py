@@ -32,9 +32,13 @@ class PipelineManifest(BaseModel):
     """Pipeline manifest model"""
     name: str
     version: str
+    slug: Optional[str] = None
     description: Optional[str] = None
     structure: Optional[dict] = None  # NEW: Graph-based pipeline definition
     implementation_path: Optional[str] = None  # Legacy fallback, optional now
+    execution_engine: Optional[str] = "fiber-default"
+    pipeline_definition: Optional[str] = None  # Path to pipeline YAML/JSON file
+    engine_config: Optional[dict] = None
     input_schema: Optional[dict] = None
     output_schema: Optional[dict] = None
     is_async: Optional[bool] = True

@@ -1,10 +1,11 @@
 """
 Pipeline schemas for the FiberWise platform.
 """
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 from enum import Enum
+import re
 
 
 class PipelineStatus(str, Enum):
@@ -42,6 +43,27 @@ class PipelineResponse(BaseModel):
     app_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    
+    @field_validator('created_at', 'updated_at', mode='before')
+    @classmethod
+    def parse_datetime(cls, v):
+        """Parse datetime strings with various formats including PostgreSQL format."""
+        if v is None:
+            return v
+        if isinstance(v, datetime):
+            return v
+        if isinstance(v, str):
+            # Handle PostgreSQL format: '2026-02-03 15:02:39.435726+00'
+            # Convert to ISO format by replacing space with T and fixing timezone
+            v = v.strip()
+            # Replace space separator with T for ISO format
+            if ' ' in v and 'T' not in v:
+                v = v.replace(' ', 'T', 1)
+            # Fix timezone format: +00 -> +00:00
+            if re.match(r'.*[+-]\d{2}$', v):
+                v = v + ':00'
+            return datetime.fromisoformat(v)
+        return v
     
     class Config:
         from_attributes = True

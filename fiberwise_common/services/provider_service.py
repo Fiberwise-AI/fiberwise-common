@@ -183,11 +183,11 @@ class ProviderService(BaseService):
             # Wrap both operations in a transaction for atomicity
             async with self.db.transaction():
                 # First, unset all defaults
-                await self.db.execute("UPDATE llm_providers SET is_default = 0")
-                
+                await self.db.execute("UPDATE llm_providers SET is_default = FALSE")
+
                 # Then set the specified one as default
                 affected_rows = await self.db.execute(
-                    "UPDATE llm_providers SET is_default = 1 WHERE name = ?", name
+                    "UPDATE llm_providers SET is_default = TRUE WHERE name = ?", name
                 )
                 
                 if affected_rows > 0:
@@ -214,7 +214,7 @@ class ProviderService(BaseService):
         """
         try:
             # Build base query with proper boolean handling and user isolation
-            base_conditions = "(is_active = 1 OR is_active = true OR is_active = 'true')"
+            base_conditions = "is_active = TRUE"
             
             if user_id is not None:
                 # Filter by user ownership (system providers + user's own providers)

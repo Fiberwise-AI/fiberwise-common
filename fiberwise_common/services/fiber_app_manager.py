@@ -611,7 +611,8 @@ class FiberAppManager:
             return AppOperationResult(False, f"Error validating function files: {e}")
 
     def _validate_pipeline_files(self, app_path: Path, manifest_data: Dict[str, Any]) -> AppOperationResult:
-        """Validate that pipeline step implementation files referenced in manifest actually exist."""
+        """Validate that pipeline step implementation files referenced in manifest actually exist.
+        Supports external pipeline definitions (pipeline_definition field) for non-default engines."""
         try:
             pipelines = manifest_data.get("pipelines", [])
             if not pipelines:
@@ -631,11 +632,23 @@ class FiberAppManager:
                     validation_errors.append(f"Pipeline at index {i} is missing a 'name'.")
                     continue
 
+                # Check for external pipeline definition (ia_modules and other engines)
+                execution_engine = pipeline.get("execution_engine", "fiber-default")
+                pipeline_definition = pipeline.get("pipeline_definition")
+
+                # If using external pipeline definition file, validate the file exists
+                if pipeline_definition and execution_engine != "fiber-default":
+                    pipeline_def_path = app_path / pipeline_definition
+                    if not pipeline_def_path.exists():
+                        validation_errors.append(f"Pipeline '{pipeline_name}' references missing file: {pipeline_definition}")
+                    # Skip structure validation for external pipeline definitions
+                    continue
+
                 structure = pipeline.get("structure")
                 if not structure or not isinstance(structure, dict):
                     validation_errors.append(f"Pipeline '{pipeline_name}' is missing a valid 'structure' object.")
                     continue
-                
+
                 steps = structure.get("steps", [])
                 
                 for j, step in enumerate(steps):

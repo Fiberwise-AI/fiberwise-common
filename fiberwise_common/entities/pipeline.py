@@ -3,7 +3,7 @@ Pydantic models for pipeline entities.
 """
 
 from datetime import datetime
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Union
 from uuid import UUID
 from pydantic import BaseModel, Field
 
@@ -17,16 +17,17 @@ class Pipeline(BaseModel):
     file_path: str = Field(..., description="Path to pipeline file")
     definition: dict = Field(..., description="Pipeline definition/structure")
     config: Optional[dict] = Field(None, description="Pipeline configuration")
+    execution_engine: str = Field("fiber-default", description="Execution engine: fiber-default, ia_modules, etc.")
+    pipeline_definition_file: Optional[str] = Field(None, description="Path to pipeline definition file (YAML/JSON)")
     app_id: UUID = Field(..., description="Application ID this pipeline belongs to")
     is_active: bool = Field(True, description="Whether pipeline is active")
     created_by: int = Field(..., description="User ID who created the pipeline")
-    created_at: datetime = Field(..., description="Creation timestamp")
-    updated_at: datetime = Field(..., description="Last update timestamp")
+    created_at: Optional[str] = Field(None, description="Creation timestamp")
+    updated_at: Optional[str] = Field(None, description="Last update timestamp")
 
     class Config:
         from_attributes = True
         json_encoders = {
-            datetime: lambda dt: dt.isoformat(),
             UUID: str
         }
 
@@ -41,22 +42,23 @@ class PipelineExecution(BaseModel):
     error: Optional[str] = Field(None, description="Error message if failed")
     priority: int = Field(10, description="Execution priority")
     created_by: int = Field(..., description="User ID who started execution")
-    started_at: Optional[datetime] = Field(None, description="Execution start time")
-    completed_at: Optional[datetime] = Field(None, description="Execution completion time")
+    started_at: Optional[str] = Field(None, description="Execution start time")
+    completed_at: Optional[str] = Field(None, description="Execution completion time")
     duration_ms: Optional[int] = Field(None, description="Execution duration in milliseconds")
-    created_at: datetime = Field(..., description="Creation timestamp")
-    updated_at: datetime = Field(..., description="Last update timestamp")
-    
+    created_at: Optional[str] = Field(None, description="Creation timestamp")
+    updated_at: Optional[str] = Field(None, description="Last update timestamp")
+
     # Additional fields for human input workflows
     human_input_config: Optional[dict] = Field(None, description="Human input configuration")
     human_input_data: Optional[dict] = Field(None, description="Human input data")
     waiting_step_id: Optional[str] = Field(None, description="Step ID waiting for human input")
 
+    # Fields from JOINs (optional, populated when queried with pipeline details)
+    pipeline_name: Optional[str] = Field(None, description="Pipeline name from JOIN")
+    app_id: Optional[str] = Field(None, description="App ID from pipeline JOIN")
+
     class Config:
         from_attributes = True
-        json_encoders = {
-            datetime: lambda dt: dt.isoformat()
-        }
 
 
 class PipelineExecutionResult(BaseModel):

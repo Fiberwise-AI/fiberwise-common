@@ -1310,7 +1310,7 @@ class AppUploadService:
 
                     update_query = """
                         UPDATE pipeline_versions
-                        SET file_path = :file_path, status = 'active', is_active = 1, updated_at = CURRENT_TIMESTAMP
+                        SET file_path = :file_path, status = 'active', is_active = TRUE, updated_at = CURRENT_TIMESTAMP
                         WHERE version_id = :version_id
                     """
                     await self.db.execute(
@@ -1358,7 +1358,7 @@ class AppUploadService:
                 
                 # Create entity bundle directory for this pipeline
                 # Format: apps/{app_id}/pipeline/{pipeline_id}/{version_id}/
-                entity_bundles_dir = os.getenv('ENTITY_BUNDLES_DIR', 'local_data/entity_bundles')
+                entity_bundles_dir = settings.ENTITY_BUNDLES_DIR
                 pipeline_bundle_dir = os.path.join(
                     entity_bundles_dir, 
                     'apps', 

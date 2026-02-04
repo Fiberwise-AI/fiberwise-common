@@ -168,11 +168,11 @@ class AccountService(BaseService):
             # Wrap both operations in a transaction for atomicity
             async with self.db.transaction():
                 # Clear existing defaults
-                await self.db.execute("UPDATE account_configs SET is_default = 0")
-                
+                await self.db.execute("UPDATE account_configs SET is_default = FALSE")
+
                 # Set new default
                 result = await self.db.execute(
-                    "UPDATE account_configs SET is_default = 1 WHERE name = :name", {"name": name}
+                    "UPDATE account_configs SET is_default = TRUE WHERE name = :name", {"name": name}
                 )
                 
                 # SQLite provider returns lastrowid, not a result object
@@ -198,7 +198,7 @@ class AccountService(BaseService):
         Returns:
             Default configuration or None
         """
-        query = "SELECT * FROM account_configs WHERE is_default = 1"
+        query = "SELECT * FROM account_configs WHERE is_default = TRUE"
         params = {}
 
         if provider:

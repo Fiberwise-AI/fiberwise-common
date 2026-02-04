@@ -574,7 +574,7 @@ class UserService(BaseService):
         Returns:
             Updated user record
         """
-        query = "UPDATE users SET is_verified = 1, updated_at = :updated_at WHERE id = :user_id"
+        query = "UPDATE users SET is_verified = TRUE, updated_at = :updated_at WHERE id = :user_id"
         await self._execute_query(query, {"updated_at": datetime.now().isoformat(), "user_id": user_id})
         
         user = await self.get_user_by_id(user_id)

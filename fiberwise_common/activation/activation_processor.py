@@ -279,7 +279,7 @@ class ActivationProcessor:
             # First, try to get an existing active API key for this agent
             query = """
                 SELECT key_value FROM agent_api_keys
-                WHERE app_id = :app_id AND agent_id = :agent_id AND is_active = 1 AND is_revoked = 0
+                WHERE app_id = :app_id AND agent_id = :agent_id AND is_active = TRUE AND is_revoked = FALSE
                 ORDER BY created_at DESC LIMIT 1
             """
 
@@ -757,7 +757,7 @@ class ActivationProcessor:
             query = """
                 SELECT provider_id, name, provider_type, api_endpoint, configuration, is_active
                 FROM llm_providers
-                WHERE provider_id = :provider_id AND is_active = 1
+                WHERE provider_id = :provider_id AND is_active = TRUE
             """
             result = await self.db.fetch_one(query, {"provider_id": provider_id})
 
@@ -1140,7 +1140,7 @@ class ActivationProcessor:
             query = """
                 SELECT av.*
                 FROM agent_versions av
-                WHERE av.agent_id = :agent_id AND av.is_active = 1
+                WHERE av.agent_id = :agent_id AND av.is_active = TRUE
                 ORDER BY av.created_at DESC
                 LIMIT 1
             """
@@ -1149,7 +1149,7 @@ class ActivationProcessor:
             query = """
                 SELECT av.*
                 FROM agent_versions av
-                WHERE av.agent_id = :agent_id AND av.version = :version AND av.is_active = 1
+                WHERE av.agent_id = :agent_id AND av.version = :version AND av.is_active = TRUE
             """
             result = await self.db.fetch_one(query, {"agent_id": agent_id, "version": version})
         

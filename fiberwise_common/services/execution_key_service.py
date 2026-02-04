@@ -147,7 +147,7 @@ class ExecutionKeyService:
                     metadata, created_at
                 FROM execution_api_keys
                 WHERE key_value = :key_value
-                    AND is_revoked = 0
+                    AND is_revoked = FALSE
             """
 
             result = await self.db.fetch_one(query, {"key_value": key_value})
@@ -232,14 +232,14 @@ class ExecutionKeyService:
         try:
             query = """
                 UPDATE execution_api_keys
-                SET is_revoked = 1, updated_at = CURRENT_TIMESTAMP
+                SET is_revoked = TRUE, updated_at = CURRENT_TIMESTAMP
                 WHERE key_id = :key_id
             """
 
             await self.db.execute(query, {"key_id": key_id})
 
             # Check if the update was successful by fetching the record
-            check_query = "SELECT key_id FROM execution_api_keys WHERE key_id = :key_id AND is_revoked = 1"
+            check_query = "SELECT key_id FROM execution_api_keys WHERE key_id = :key_id AND is_revoked = TRUE"
             result = await self.db.fetch_one(check_query, {"key_id": key_id})
             
             success = result is not None
@@ -265,14 +265,14 @@ class ExecutionKeyService:
 
             query = """
                 UPDATE execution_api_keys
-                SET is_revoked = 1, updated_at = CURRENT_TIMESTAMP
-                WHERE expiration < :now AND is_revoked = 0
+                SET is_revoked = TRUE, updated_at = CURRENT_TIMESTAMP
+                WHERE expiration < :now AND is_revoked = FALSE
             """
 
             await self.db.execute(query, {"now": now})
 
             # Count how many were updated
-            count_query = "SELECT COUNT(*) FROM execution_api_keys WHERE expiration < :now AND is_revoked = 1"
+            count_query = "SELECT COUNT(*) FROM execution_api_keys WHERE expiration < :now AND is_revoked = TRUE"
             count_result = await self.db.fetch_one(count_query, {"now": now})
             if count_result:
                 count = count_result[0] if isinstance(count_result, (list, tuple)) else list(count_result.values())[0]
@@ -329,7 +329,7 @@ class ExecutionKeyService:
                 params["created_by"] = created_by
 
             if not include_revoked:
-                conditions.append("is_revoked = 0")
+                conditions.append("is_revoked = FALSE")
 
             where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
 

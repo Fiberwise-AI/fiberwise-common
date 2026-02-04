@@ -393,7 +393,7 @@ class FunctionService:
             impl_query = """
                 SELECT implementation_type, file_path, content, storage_provider, language, name
                 FROM function_code
-                WHERE function_id = ? AND is_active = 1
+                WHERE function_id = ? AND is_active = TRUE
                 ORDER BY created_at DESC
                 LIMIT 1
             """
