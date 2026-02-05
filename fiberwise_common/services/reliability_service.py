@@ -42,26 +42,49 @@ class ReliabilityService(BaseService):
         self._init_ia_modules()
         if self._ia_metrics:
             try:
-                report = await self._ia_metrics.get_report(pipeline_id=pipeline_id)
+                # get_report() doesn't take pipeline_id parameter in ia_modules
+                report = await self._ia_metrics.get_report()
+                # Map to keys expected by frontend (without _ms suffix)
+                tcl = getattr(report, 'tcl', 0) or getattr(report, 'tool_call_latency_ms', 0)
+                wct = getattr(report, 'wct', 0) or getattr(report, 'workflow_completion_time_ms', 0)
                 return {
-                    "success_rate": getattr(report, 'success_rate', 0),
-                    "compensation_rate": getattr(report, 'compensation_rate', 0),
-                    "pass_confidence": getattr(report, 'pass_confidence', 0),
-                    "human_intervention_rate": getattr(report, 'human_intervention_rate', 0),
-                    "model_accuracy": getattr(report, 'model_accuracy', 0),
-                    "tool_call_latency_ms": getattr(report, 'tool_call_latency_ms', 0),
-                    "workflow_completion_time_ms": getattr(report, 'workflow_completion_time_ms', 0),
-                    "total_executions": getattr(report, 'total_executions', 0)
+                    "success_rate": getattr(report, 'sr', 0) or getattr(report, 'success_rate', 0),
+                    "compensation_rate": getattr(report, 'cr', 0) or getattr(report, 'compensation_rate', 0),
+                    "pass_confidence": getattr(report, 'pc', 0) or getattr(report, 'pass_confidence', 0),
+                    "human_intervention_rate": getattr(report, 'hir', 0) or getattr(report, 'human_intervention_rate', 0),
+                    "model_accuracy": getattr(report, 'ma', 0) or getattr(report, 'model_accuracy', 0),
+                    "tool_call_latency": tcl,  # Frontend expects no _ms suffix
+                    "workflow_completion_time": wct / 1000.0 if wct > 0 else 0,  # Convert ms to seconds for frontend
+                    "total_executions": getattr(report, 'total_executions', 0),
+                    "pipeline_id": pipeline_id,
+                    "source": "ia_modules"
                 }
             except Exception as e:
-                logger.error(f"ia_modules metrics error: {e}")
+                logger.error(f"ia_modules metrics error: {e}", exc_info=True)
 
         # Fallback: compute from DB
-        rows = await self.db.fetch_all(
-            "SELECT metric_name, metric_value FROM reliability_metrics WHERE pipeline_id = :pid ORDER BY created_at DESC LIMIT 20",
-            {"pid": pipeline_id}
-        ) if pipeline_id else []
-        return {"metrics": [dict(r) for r in rows] if rows else [], "source": "database"}
+        if pipeline_id:
+            rows = await self.db.fetch_all(
+                "SELECT metric_name, metric_value FROM reliability_metrics WHERE pipeline_id = :pid ORDER BY created_at DESC LIMIT 20",
+                {"pid": pipeline_id}
+            )
+        else:
+            rows = await self.db.fetch_all(
+                "SELECT metric_name, metric_value FROM reliability_metrics ORDER BY created_at DESC LIMIT 20"
+            )
+        return {
+            "metrics": [dict(r) for r in rows] if rows else [],
+            "pipeline_id": pipeline_id,
+            "source": "database",
+            "success_rate": 0,
+            "compensation_rate": 0,
+            "pass_confidence": 0,
+            "human_intervention_rate": 0,
+            "model_accuracy": 0,
+            "tool_call_latency": 0,  # Frontend expects no _ms suffix
+            "workflow_completion_time": 0,  # Frontend expects seconds
+            "total_executions": 0
+        }
 
     async def check_anomalies(self, execution_id: str) -> Dict[str, Any]:
         """Check for anomalies in an execution."""

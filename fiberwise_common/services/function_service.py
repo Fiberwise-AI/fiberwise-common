@@ -48,38 +48,37 @@ class FunctionService:
         self.db = db
 
     async def get_functions(
-        self, 
-        search=None, 
-        function_type=None, 
-        limit=100, 
+        self,
+        search=None,
+        function_type=None,
+        limit=100,
         offset=0
     ) -> List[Dict[str, Any]]:
         """Get functions with optional filtering"""
         query_parts = ["SELECT * FROM functions"]
-        params = []
-        param_index = 1
-        
+        params = {}
+
         # Build WHERE clause
         where_clauses = []
         if search:
-            where_clauses.append(f"(name LIKE ? OR description LIKE ?)")
-            params.extend([f"%{search}%", f"%{search}%"])
-        
+            where_clauses.append(f"(name LIKE :search OR description LIKE :search)")
+            params["search"] = f"%{search}%"
+
         if function_type:
-            where_clauses.append(f"function_type = ?")
-            params.append(function_type)
-        
+            where_clauses.append(f"function_type = :function_type")
+            params["function_type"] = function_type
+
         if where_clauses:
             query_parts.append("WHERE " + " AND ".join(where_clauses))
-        
+
         # Add order and pagination
         query_parts.append("ORDER BY name ASC")
         query_parts.append(f"LIMIT {limit} OFFSET {offset}")
-        
+
         query = " ".join(query_parts)
-        
+
         try:
-            result = await self.db.fetch_all(query, *params)
+            result = await self.db.fetch_all(query, params)
             functions = []
             for row in result:
                 function_dict = dict(row)
@@ -106,9 +105,9 @@ class FunctionService:
 
     async def get_function_by_id(self, app_id: uuid, function_id: str) -> Optional[Dict[str, Any]]:
         """Get function by ID"""
-        query = "SELECT * FROM functions WHERE function_id = ?"
+        query = "SELECT * FROM functions WHERE function_id = :function_id"
         try:
-            result = await self.db.fetch_one(query, function_id)
+            result = await self.db.fetch_one(query, {"function_id": function_id})
             if result:
                 function_dict = dict(result)
                 # Parse JSON strings back to dictionaries
@@ -162,30 +161,32 @@ class FunctionService:
         
         query = """
         INSERT INTO functions (
-            function_id, name, description, function_type, 
+            function_id, name, description, function_type,
             input_schema, output_schema, implementation,
             is_async, is_system
         ) VALUES (
-            ?, ?, ?, ?, ?, ?, ?, ?, ?
+            :function_id, :name, :description, :function_type,
+            :input_schema, :output_schema, :implementation,
+            :is_async, :is_system
         )
         """
-        
-        values = (
-            function_id,
-            function_data.get("name"),
-            function_data.get("description", ""),
-            function_data.get("function_type", "utility"),
-            input_schema,
-            output_schema,
-            function_data.get("implementation", ""),
-            function_data.get("is_async", False),
-            function_data.get("is_system", False)
-        )
-        
+
+        params = {
+            "function_id": function_id,
+            "name": function_data.get("name"),
+            "description": function_data.get("description", ""),
+            "function_type": function_data.get("function_type", "utility"),
+            "input_schema": input_schema,
+            "output_schema": output_schema,
+            "implementation": function_data.get("implementation", ""),
+            "is_async": function_data.get("is_async", False),
+            "is_system": function_data.get("is_system", False)
+        }
+
         try:
-            await self.db.execute(query, *values)
+            await self.db.execute(query, params)
             # SQLite doesn't support RETURNING, so we need to fetch the created function
-            result = await self.db.fetch_one("SELECT * FROM functions WHERE function_id = ?", function_id)
+            result = await self.db.fetch_one("SELECT * FROM functions WHERE function_id = :function_id", {"function_id": function_id})
             if result:
                 function_dict = dict(result)
                 # Parse JSON strings back to dictionaries
@@ -263,15 +264,15 @@ class FunctionService:
     async def delete_function(self, function_id: str) -> bool:
         """Delete a function"""
         # Don't allow deleting system functions
-        check_query = "SELECT is_system FROM functions WHERE function_id = ?"
-        is_system = await self.db.fetch_val(check_query, function_id)
+        check_query = "SELECT is_system FROM functions WHERE function_id = :function_id"
+        is_system = await self.db.fetch_val(check_query, {"function_id": function_id})
         if is_system:
             raise ValueError("Cannot delete system functions")
-        
-        query = "DELETE FROM functions WHERE function_id = ? AND is_system = 0"
-        
+
+        query = "DELETE FROM functions WHERE function_id = :function_id AND is_system = false"
+
         try:
-            await self.db.execute(query, function_id)
+            await self.db.execute(query, {"function_id": function_id})
             return True
         except Exception as e:
             logger.error(f"Error deleting function {function_id}: {str(e)}")
@@ -360,26 +361,27 @@ class FunctionService:
         INSERT INTO function_executions (
             execution_id, function_id, input_data, status, started_at, created_by
         ) VALUES (
-            ?, ?, ?, ?, datetime('now'), ?
+            :execution_id, :function_id, :input_data, :status, NOW(), :created_by
         )
         """
-        
+
         created_by = user.id if user else None
         try:
             # Ensure input_data is properly serialized and stored as JSONB
             serialized_input = json.dumps(input_data)
             logger.info(f"Creating function execution record with input: {serialized_input[:100]}...")
-            
-            await self.db.execute(
-                exec_query, 
-                execution_id,                # execution_id
-                function_id,                 # function_id
-                serialized_input,            # input_data 
-                "running",                   # status
-                created_by                   # created_by
-            )
+
+            params = {
+                "execution_id": execution_id,
+                "function_id": function_id,
+                "input_data": serialized_input,
+                "status": "running",
+                "created_by": created_by
+            }
+
+            await self.db.execute(exec_query, params)
             # Fetch the created execution record
-            execution = await self.db.fetch_one("SELECT * FROM function_executions WHERE execution_id = ?", execution_id)
+            execution = await self.db.fetch_one("SELECT * FROM function_executions WHERE execution_id = :execution_id", {"execution_id": execution_id})
             execution_dict = dict(execution) if execution else {}
             logger.info(f"Created execution record: {execution_id}, data stored: {bool(execution_dict.get('input_data'))}")
         except Exception as e:
@@ -393,12 +395,12 @@ class FunctionService:
             impl_query = """
                 SELECT implementation_type, file_path, content, storage_provider, language, name
                 FROM function_code
-                WHERE function_id = ? AND is_active = TRUE
+                WHERE function_id = :function_id AND is_active = true
                 ORDER BY created_at DESC
                 LIMIT 1
             """
-            
-            function_impl = await self.db.fetch_one(impl_query, function_id)
+
+            function_impl = await self.db.fetch_one(impl_query, {"function_id": function_id})
             
             if function_impl:
                 impl_data = dict(function_impl)
@@ -481,38 +483,35 @@ class FunctionService:
 
     async def _update_execution(
         self,
-        execution_id: str, 
-        status: str, 
-        result: Optional[Dict[str, Any]] = None, 
+        execution_id: str,
+        status: str,
+        result: Optional[Dict[str, Any]] = None,
         error: Optional[str] = None
     ) -> None:
         """Update function execution record"""
-        update_fields = ["status = ?", "completed_at = datetime('now')"]
-        values = [status]
-        
+        update_fields = ["status = :status", "completed_at = NOW()"]
+        params = {"status": status, "execution_id": execution_id}
+
         if result is not None:
             # Ensure result is properly serialized as JSON
-            update_fields.append("output_data = ?")
+            update_fields.append("output_data = :output_data")
             serialized_result = json.dumps(result)
-            values.append(serialized_result)
+            params["output_data"] = serialized_result
             logger.info(f"Updating execution with result: {serialized_result[:100]}...")
-        
+
         if error is not None:
-            update_fields.append("error = ?")
-            values.append(error)
-        
-        # Add execution_id to the end for the WHERE clause
-        values.append(execution_id)
-        
+            update_fields.append("error = :error")
+            params["error"] = error
+
         query = f"""
         UPDATE function_executions
         SET {", ".join(update_fields)}
-        WHERE execution_id = ?
+        WHERE execution_id = :execution_id
         """
-        
+
         try:
             logger.info(f"Updating execution record {execution_id} with status {status}")
-            result = await self.db.execute(query, *values)
+            result = await self.db.execute(query, params)
             logger.info(f"Update result: {result}")
         except Exception as e:
             logger.error(f"Error updating execution record {execution_id}: {str(e)}", exc_info=True)
@@ -741,7 +740,7 @@ async def run(input_data):
                    f.name as function_name, f.function_type
             FROM function_code fc
             JOIN functions f ON fc.function_id = f.function_id
-            WHERE fc.function_id = :function_id AND fc.is_active = 1 AND fc.implementation_type = 'file'
+            WHERE fc.function_id = :function_id AND fc.is_active = true AND fc.implementation_type = 'file'
             ORDER BY fc.created_at DESC
             LIMIT 1
         """

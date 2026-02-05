@@ -48,7 +48,7 @@ class AppVersionService(BaseService):
             List of app version records
         """
         query_parts = ["""
-            SELECT 
+            SELECT
                 app_version_id,
                 app_id,
                 version,
@@ -61,19 +61,19 @@ class AppVersionService(BaseService):
                 updated_at,
                 deployed_at
             FROM app_versions
-            WHERE app_id = ?
+            WHERE app_id = :app_id
         """]
-        params = [app_id]
-        
+        params = {"app_id": app_id}
+
         if status:
-            query_parts.append("AND status = ?")
-            params.append(status)
-        
+            query_parts.append("AND status = :status")
+            params["status"] = status
+
         query_parts.append("ORDER BY created_at DESC")
         query_parts.append(f"LIMIT {limit} OFFSET {offset}")
-        
+
         query = " ".join(query_parts)
-        versions = await self.db.fetchall(query, *params)
+        versions = await self.db.fetch_all(query, params)
         
         # Process results
         result = []
@@ -93,8 +93,8 @@ class AppVersionService(BaseService):
         Returns:
             Version record or None if not found
         """
-        query = "SELECT * FROM app_versions WHERE app_version_id = ?"
-        version = await self.db.fetchone(query, version_id)
+        query = "SELECT * FROM app_versions WHERE app_version_id = :version_id"
+        version = await self.db.fetch_one(query, {"version_id": version_id})
         
         if not version:
             return None
@@ -112,12 +112,12 @@ class AppVersionService(BaseService):
             Active version record or None if no active version
         """
         query = """
-            SELECT * FROM app_versions 
-            WHERE app_id = ? AND is_active = 1
+            SELECT * FROM app_versions
+            WHERE app_id = :app_id AND is_active = true
             ORDER BY created_at DESC
             LIMIT 1
         """
-        version = await self.db.fetchone(query, app_id)
+        version = await self.db.fetch_one(query, {"app_id": app_id})
         
         if not version:
             return None
@@ -203,28 +203,30 @@ class AppVersionService(BaseService):
         
         # Build dynamic update query
         update_fields = []
-        params = []
-        
+        params = {"version_id": version_id}
+        param_counter = 0
+
         for field in ['status', 'changelog', 'manifest_yaml', 'is_active']:
             if field in update_data:
-                update_fields.append(f"{field} = ?")
-                params.append(update_data[field])
-        
+                param_name = f"param_{param_counter}"
+                update_fields.append(f"{field} = :{param_name}")
+                params[param_name] = update_data[field]
+                param_counter += 1
+
         if not update_fields:
             return existing
-        
+
         # Add updated_at
-        update_fields.append("updated_at = ?")
-        params.append(datetime.now().isoformat())
-        params.append(version_id)
-        
+        update_fields.append("updated_at = :updated_at")
+        params["updated_at"] = datetime.now().isoformat()
+
         query = f"""
-            UPDATE app_versions 
+            UPDATE app_versions
             SET {', '.join(update_fields)}
-            WHERE app_version_id = ?
+            WHERE app_version_id = :version_id
         """
-        
-        await self.db.execute(query, *params)
+
+        await self.db.execute(query, params)
         
         return await self.get_version_by_id(version_id)
 
@@ -253,15 +255,15 @@ class AppVersionService(BaseService):
         try:
             # Deactivate current active version
             await self.db.execute(
-                "UPDATE app_versions SET is_active = 0 WHERE app_id = ? AND is_active = 1",
-                app_id
+                "UPDATE app_versions SET is_active = false WHERE app_id = :app_id AND is_active = true",
+                {"app_id": app_id}
             )
-            
+
             # Activate new version
             now = datetime.now().isoformat()
             await self.db.execute(
-                "UPDATE app_versions SET is_active = 1, deployed_at = ?, status = 'active' WHERE app_version_id = ?",
-                now, version_id
+                "UPDATE app_versions SET is_active = true, deployed_at = :deployed_at, status = 'active' WHERE app_version_id = :version_id",
+                {"deployed_at": now, "version_id": version_id}
             )
             
             return {
@@ -308,15 +310,15 @@ class AppVersionService(BaseService):
         try:
             # Deactivate current version
             await self.db.execute(
-                "UPDATE app_versions SET is_active = 0, status = 'rolled_back' WHERE app_version_id = ?",
-                current_version_id
+                "UPDATE app_versions SET is_active = false, status = 'rolled_back' WHERE app_version_id = :current_version_id",
+                {"current_version_id": current_version_id}
             )
-            
+
             # Activate target version
             now = datetime.now().isoformat()
             await self.db.execute(
-                "UPDATE app_versions SET is_active = 1, deployed_at = ?, status = 'active' WHERE app_version_id = ?",
-                now, target_version_id
+                "UPDATE app_versions SET is_active = true, deployed_at = :deployed_at, status = 'active' WHERE app_version_id = :target_version_id",
+                {"deployed_at": now, "target_version_id": target_version_id}
             )
             
             return {
@@ -434,8 +436,8 @@ class AppVersionService(BaseService):
         
         # Soft delete by updating status
         await self.db.execute(
-            "UPDATE app_versions SET status = 'deleted', updated_at = ? WHERE app_version_id = ?",
-            datetime.now().isoformat(), version_id
+            "UPDATE app_versions SET status = 'deleted', updated_at = :updated_at WHERE app_version_id = :version_id",
+            {"updated_at": datetime.now().isoformat(), "version_id": version_id}
         )
         
         return True

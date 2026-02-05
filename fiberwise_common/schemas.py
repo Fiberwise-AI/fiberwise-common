@@ -41,12 +41,9 @@ def get_system_user_field() -> str:
 
 class AgentType(str, Enum):
     """Types of agents supported by the platform"""
-    FUNCTION = "function"
-    CLASS = "class"
-    LLM_CHAT = "llm_chat"
-    DATA_PROCESSOR = "data_processor"
-    WORKFLOW = "workflow"
-    PIPELINE = "pipeline"
+    CLASS = "class"  # Python code (class or function)
+    CUSTOM = "custom"  # Legacy custom agents
+    LLM = "llm"  # Config-only (no code)
 
 
 class AgentStatus(str, Enum):
@@ -64,7 +61,7 @@ class AgentSummary(BaseModel):
     name: str = Field(..., description="Agent name")
     description: Optional[str] = Field(None, description="Agent description")
     version: str = Field("1.0.0", description="Current version")
-    agent_type: AgentType = Field(AgentType.FUNCTION, description="Type of agent")
+    agent_type: AgentType = Field(AgentType.CUSTOM, description="Type of agent")
     status: AgentStatus = Field(AgentStatus.ACTIVE, description="Agent status")
     is_system: bool = Field(False, description="Whether this is a system agent")
     capabilities: List[str] = Field(default_factory=list, description="Agent capabilities")

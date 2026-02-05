@@ -25,9 +25,20 @@ class AgentListResponse(BaseModel):
 
 class AgentActivationRequest(BaseModel):
     """Request model for activating an agent"""
-    input_data: Dict[str, Any] = Field(default={}, description="Input data for the agent")
-    context_type: Optional[str] = Field(default="general", description="Context type for activation")
+    # Support both old and new field names for backward compatibility
+    input_data: Optional[Dict[str, Any]] = Field(default=None, description="Input data for the agent (deprecated, use 'input')")
+    input: Optional[Dict[str, Any]] = Field(default=None, description="Input data for the agent")
+    context: Optional[Dict[str, Any]] = Field(default=None, description="Context dict with provider_id, etc")
+    context_type: Optional[str] = Field(default="general", description="Context type for activation (deprecated)")
     metadata: Optional[Dict[str, Any]] = Field(default={}, description="Additional metadata for activation")
+
+    def get_input_data(self) -> Dict[str, Any]:
+        """Get input data from either 'input' or 'input_data' field"""
+        return self.input or self.input_data or {}
+
+    def get_context(self) -> Dict[str, Any]:
+        """Get context dict from 'context' field"""
+        return self.context or {}
 
 
 class AgentActivationResponse(BaseModel):
@@ -128,6 +139,7 @@ class AgentType(str, Enum):
     """Types of agents supported by the platform"""
     FUNCTION = "function"
     CLASS = "class"
+    CUSTOM = "custom"
     LLM_CHAT = "llm_chat"
     DATA_PROCESSOR = "data_processor"
     WORKFLOW = "workflow"

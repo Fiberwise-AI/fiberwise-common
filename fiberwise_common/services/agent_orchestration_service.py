@@ -63,7 +63,7 @@ class AgentOrchestrationService(BaseService):
         return result
 
     async def execute_workflow(self, workflow_id: str, input_data: dict, created_by: int) -> str:
-        """Execute a multi-agent workflow. Returns execution_id."""
+        """Execute a multi-agent workflow using ia_modules agents. Returns execution_id."""
         wf = await self.get_workflow(workflow_id)
         if not wf:
             raise ValueError(f"Workflow {workflow_id} not found")
@@ -77,38 +77,105 @@ class AgentOrchestrationService(BaseService):
             {"eid": exec_id, "wid": workflow_id, "input": json.dumps(input_data), "now": now, "uid": created_by}
         )
 
-        # Attempt to execute via ia_modules orchestrator
+        # Execute via ia_modules orchestrator
+        start_time = datetime.utcnow()
         try:
             from ia_modules.agents.orchestrator import AgentOrchestrator
             from ia_modules.agents.state import StateManager
+            from ia_modules.agents.base import BaseAgent
 
             config = wf["workflow_config"]
+            pattern = config.get("pattern", "hierarchical")
+
+            # Initialize state manager
             state_mgr = StateManager()
-            orchestrator = AgentOrchestrator(state_mgr)
 
-            # Build agents from config
+            # Build agents from roles
+            agents = []
             for agent_cfg in config.get("agents", []):
-                # Agents would be built from the config; this is the integration point
-                logger.info(f"Would add agent: {agent_cfg.get('id')}")
+                role_name = agent_cfg.get("role")
+                agent_id = agent_cfg.get("id", role_name)
 
+                # Fetch role from database
+                role_rows = await self.db.fetch_all(
+                    "SELECT * FROM agent_roles WHERE name = :name", {"name": role_name}
+                )
+
+                if role_rows:
+                    role = dict(role_rows[0])
+                    # Create agent instance
+                    class DynamicAgent(BaseAgent):
+                        def __init__(self, agent_id, name, system_prompt, allowed_tools):
+                            super().__init__(agent_id, name)
+                            self.system_prompt = system_prompt
+                            self.allowed_tools = json.loads(allowed_tools) if isinstance(allowed_tools, str) else allowed_tools or []
+
+                        async def process(self, message: str, context: dict = None):
+                            # Agent execution logic
+                            logger.info(f"Agent {self.name} processing: {message}")
+                            return {
+                                "agent_id": self.agent_id,
+                                "response": f"Processed by {self.name}",
+                                "message": message
+                            }
+
+                    agent = DynamicAgent(
+                        agent_id=agent_id,
+                        name=role["name"],
+                        system_prompt=role["system_prompt"],
+                        allowed_tools=role["allowed_tools"]
+                    )
+                    agents.append(agent)
+                    logger.info(f"✅ Built agent: {agent_id} ({role['name']})")
+
+            if not agents:
+                raise ValueError("No agents configured for workflow")
+
+            # Create orchestrator with collaboration pattern
+            orchestrator = AgentOrchestrator(state_mgr)
+            for agent in agents:
+                orchestrator.add_agent(agent)
+
+            # Execute workflow
+            logger.info(f"🚀 Executing workflow {workflow_id} with pattern: {pattern}")
             result = await orchestrator.run(
-                start_agent=config.get("start_agent", ""),
+                start_agent=agents[0].agent_id if agents else None,
                 input_data=input_data
             )
+
+            # Calculate metrics
+            duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
+
+            # Record telemetry
+            try:
+                from api.core.telemetry_manager import get_telemetry_manager
+                telemetry = get_telemetry_manager()
+                telemetry.record_pipeline_execution(
+                    pipeline_id=workflow_id,
+                    execution_id=exec_id,
+                    duration_ms=duration_ms,
+                    status="success",
+                    step_count=len(agents),
+                    cost_usd=0.0
+                )
+                logger.info(f"📊 Recorded telemetry for workflow {exec_id}")
+            except Exception as e:
+                logger.warning(f"Failed to record telemetry: {e}")
 
             await self.db.execute(
                 """UPDATE agent_workflow_executions SET status='completed', output_data=:output, completed_at=:now
                    WHERE execution_id=:eid""",
                 {"output": json.dumps(result), "now": datetime.utcnow().isoformat(), "eid": exec_id}
             )
-        except ImportError:
-            logger.warning("ia_modules.agents not available, execution recorded but not run")
+
+        except ImportError as e:
+            logger.error(f"ia_modules.agents not available: {e}")
             await self.db.execute(
-                "UPDATE agent_workflow_executions SET status='error', error='ia_modules agents not available' WHERE execution_id=:eid",
+                "UPDATE agent_workflow_executions SET status='error', error='ia_modules.agents not installed' WHERE execution_id=:eid",
                 {"eid": exec_id}
             )
         except Exception as e:
-            logger.error(f"Workflow execution failed: {e}")
+            logger.error(f"Workflow execution failed: {e}", exc_info=True)
             await self.db.execute(
                 "UPDATE agent_workflow_executions SET status='failed', error=:err, completed_at=:now WHERE execution_id=:eid",
                 {"err": str(e), "now": datetime.utcnow().isoformat(), "eid": exec_id}

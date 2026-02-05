@@ -133,8 +133,8 @@ class AgentService(BaseService):
         Returns:
             Agent record or None if not found
         """
-        query = "SELECT * FROM agents WHERE agent_id = ?"
-        agent = await self.db.fetchone(query, agent_id)
+        query = "SELECT * FROM agents WHERE agent_id = :agent_id"
+        agent = await self.db.fetch_one(query, {"agent_id": agent_id})
         
         if not agent:
             return None
@@ -230,29 +230,34 @@ class AgentService(BaseService):
         """
         # Build dynamic update query
         update_fields = []
-        params = []
-        
+        params = {}
+        param_counter = 0
+
         for field in ['name', 'description', 'agent_type_id', 'agent_code', 'type', 'is_active']:
             if field in update_data:
-                update_fields.append(f"{field} = ?")
+                param_name = f"param_{param_counter}"
+                update_fields.append(f"{field} = :{param_name}")
                 value = update_data[field]
-                
+
                 # Handle boolean for SQLite
                 if field == 'is_active' and isinstance(value, bool):
                     value = 1 if value else 0
-                
-                params.append(value)
-        
+
+                params[param_name] = value
+                param_counter += 1
+
         # Handle JSON fields - store in config and capabilities
         json_updates = {}
         for field in ['input_schema', 'output_schema', 'required_services']:
             if field in update_data:
                 json_updates[field] = update_data[field]
-        
+
         if 'capabilities' in update_data:
-            update_fields.append("capabilities = ?")
-            params.append(json.dumps(update_data['capabilities']))
-        
+            param_name = f"param_{param_counter}"
+            update_fields.append(f"capabilities = :{param_name}")
+            params[param_name] = json.dumps(update_data['capabilities'])
+            param_counter += 1
+
         if json_updates or 'config' in update_data:
             # Merge JSON updates into config
             current_agent = await self.get_agent_by_id(agent_id)
@@ -261,24 +266,26 @@ class AgentService(BaseService):
                 current_config.update(json_updates)
                 if 'config' in update_data:
                     current_config.update(update_data['config'])
-                update_fields.append("config = ?")
-                params.append(json.dumps(current_config))
-        
+                param_name = f"param_{param_counter}"
+                update_fields.append(f"config = :{param_name}")
+                params[param_name] = json.dumps(current_config)
+                param_counter += 1
+
         if not update_fields:
             return await self.get_agent_by_id(agent_id)
-        
+
         # Add updated_at and agent_id
-        update_fields.append("updated_at = ?")
-        params.append(datetime.now().isoformat())
-        params.append(agent_id)
-        
+        update_fields.append("updated_at = :updated_at")
+        params["updated_at"] = datetime.now().isoformat()
+        params["agent_id"] = agent_id
+
         query = f"""
-            UPDATE agents 
+            UPDATE agents
             SET {', '.join(update_fields)}
-            WHERE agent_id = ?
+            WHERE agent_id = :agent_id
         """
-        
-        await self.db.execute(query, *params)
+
+        await self.db.execute(query, params)
         
         return await self.get_agent_by_id(agent_id)
 
@@ -298,8 +305,8 @@ class AgentService(BaseService):
             return False
         
         # Delete agent (activations will be handled by foreign key constraints)
-        query = "DELETE FROM agents WHERE agent_id = ?"
-        await self.db.execute(query, (agent_id,))
+        query = "DELETE FROM agents WHERE agent_id = :agent_id"
+        await self.db.execute(query, {"agent_id": agent_id})
         
         return True
 
@@ -386,10 +393,10 @@ class AgentService(BaseService):
         """Get a complete activation record by ID."""
         query = """SELECT activation_id, agent_id, agent_type_id, status, started_at,
                           completed_at, duration_ms, input_data, output_data, context,
-                          metadata, created_by, organization_id, created_at FROM agent_activations WHERE activation_id = ?"""
-        
+                          metadata, created_by, organization_id, created_at FROM agent_activations WHERE activation_id = :activation_id"""
+
         try:
-            rows = await self.db.fetch_all(query, activation_id)
+            rows = await self.db.fetch_all(query, {"activation_id": activation_id})
             if not rows:
                 return None
             
@@ -556,36 +563,37 @@ class AgentService(BaseService):
         """
         # Build context filter clause if provided
         context_clause = ""
-        context_params = []
-        
+        params = {
+            "agent_id": str(agent_id),
+            "created_by": created_by,
+            "limit": limit
+        }
+
         if context_filter:
             context_conditions = []
-            for key, value in context_filter.items():
+            for idx, (key, value) in enumerate(context_filter.items()):
                 # Filter on context.{key} using JSON extraction
-                context_conditions.append(f"JSON_EXTRACT(context, '$.{key}') = ?")
-                context_params.append(str(value))
-            
+                param_name = f"context_value_{idx}"
+                context_conditions.append(f"JSON_EXTRACT(context, '$.{key}') = :{param_name}")
+                params[param_name] = str(value)
+
             if context_conditions:
                 context_clause = " AND " + " AND ".join(context_conditions)
-        
+
         # Get activations for specific agent filtered by created_by
         query = f"""
-        SELECT activation_id, agent_id, agent_type_id, status, started_at, 
-               completed_at, duration_ms, input_data, output_data, context, 
-               metadata, created_by, created_at FROM agent_activations 
-        WHERE agent_id = ? AND created_by = ?{context_clause}
-        ORDER BY created_at DESC 
-        LIMIT ?
+        SELECT activation_id, agent_id, agent_type_id, status, started_at,
+               completed_at, duration_ms, input_data, output_data, context,
+               metadata, created_by, created_at FROM agent_activations
+        WHERE agent_id = :agent_id AND created_by = :created_by{context_clause}
+        ORDER BY created_at DESC
+        LIMIT :limit
         """
-        
-        params = [str(agent_id), created_by] + context_params + [limit]
-        
+
         try:
             logger.debug(f"Query: {query}")
             logger.debug(f"Params: {params} (count: {len(params)})")
-            # Convert params list to tuple for database execution
-            params_tuple = tuple(params)
-            rows = await self.db.fetch_all(query, *params_tuple)
+            rows = await self.db.fetch_all(query, params)
             
             # Convert rows to dicts and parse JSON fields
             result = []
@@ -635,25 +643,30 @@ class AgentService(BaseService):
             List of activation records for the current user
         """
         query = """
-        SELECT activation_id, agent_id, agent_type_id, status, started_at, 
-               completed_at, duration_ms, input_data, output_data, context, 
-               metadata, created_by, created_at FROM agent_activations 
-        WHERE agent_id = ? AND created_by = ?
-        ORDER BY created_at DESC 
-        LIMIT ? OFFSET ?
+        SELECT activation_id, agent_id, agent_type_id, status, started_at,
+               completed_at, duration_ms, input_data, output_data, context,
+               metadata, created_by, created_at FROM agent_activations
+        WHERE agent_id = :agent_id AND created_by = :created_by
+        ORDER BY created_at DESC
+        LIMIT :limit OFFSET :offset
         """
-        
+
         try:
             # Ensure parameters are correct types
             safe_limit = int(limit) if limit is not None else 10
             safe_offset = int(offset) if offset is not None else 0
-            params = (str(agent_id), str(user_id), safe_limit, safe_offset)
-            
+            params = {
+                "agent_id": str(agent_id),
+                "created_by": str(user_id),
+                "limit": safe_limit,
+                "offset": safe_offset
+            }
+
             logger.debug(f"Fetching activations for agent {agent_id} by user {user_id}")
             logger.debug(f"Query: {query}")
             logger.debug(f"Params: {params}")
-            
-            rows = await self.db.fetch_all(query, *params)
+
+            rows = await self.db.fetch_all(query, params)
             
             # Convert rows to dicts and parse JSON fields
             result = []
@@ -703,42 +716,41 @@ class AgentService(BaseService):
         """
         # Build context filter conditions
         context_conditions = []
-        context_params = []
-        
+        params = {
+            "app_id": str(app_id),
+            "organization_id": str(organization_id),
+            "limit": limit
+        }
+
         if context_filter:
-            for key, value in context_filter.items():
-                if isinstance(value, str):
-                    # Use JSON_EXTRACT for string values
-                    context_conditions.append("JSON_EXTRACT(context, ?) = ?")
-                    context_params.extend([f"$.{key}", value])
-                elif isinstance(value, (int, float)):
-                    # For numeric values
-                    context_conditions.append("JSON_EXTRACT(context, ?) = ?")
-                    context_params.extend([f"$.{key}", value])
-        
+            for idx, (key, value) in enumerate(context_filter.items()):
+                if isinstance(value, (str, int, float)):
+                    # Use JSON_EXTRACT with named parameters
+                    path_param = f"context_path_{idx}"
+                    value_param = f"context_value_{idx}"
+                    context_conditions.append(f"JSON_EXTRACT(context, :{path_param}) = :{value_param}")
+                    params[path_param] = f"$.{key}"
+                    params[value_param] = value
+
         context_clause = ""
         if context_conditions:
             context_clause = " AND " + " AND ".join(context_conditions)
-        
+
         query = f"""
-        SELECT aa.activation_id, aa.agent_id, aa.agent_type_id, aa.status, aa.started_at, 
-               aa.completed_at, aa.duration_ms, aa.input_data, aa.output_data, aa.context, 
+        SELECT aa.activation_id, aa.agent_id, aa.agent_type_id, aa.status, aa.started_at,
+               aa.completed_at, aa.duration_ms, aa.input_data, aa.output_data, aa.context,
                aa.metadata, aa.created_by, aa.created_at, aa.app_id
         FROM agent_activations aa
         JOIN app_installations ai ON aa.app_id = ai.app_id
-        WHERE aa.app_id = ? AND ai.organization_id = ?{context_clause}
-        ORDER BY aa.created_at DESC 
-        LIMIT ?
+        WHERE aa.app_id = :app_id AND ai.organization_id = :organization_id{context_clause}
+        ORDER BY aa.created_at DESC
+        LIMIT :limit
         """
-        
-        params = [str(app_id), str(organization_id)] + context_params + [limit]
-        
+
         try:
             logger.debug(f"Query: {query}")
             logger.debug(f"Params: {params} (count: {len(params)})")
-            # Convert params list to tuple for database execution
-            params_tuple = tuple(params)
-            rows = await self.db.fetch_all(query, *params_tuple)
+            rows = await self.db.fetch_all(query, params)
             
             # Convert rows to dicts and parse JSON fields
             result = []
@@ -775,57 +787,69 @@ class AgentService(BaseService):
         user_id: int,
         organization_id: str,
         limit: int = 10,
-        context_filter: Optional[Dict[str, Any]] = None
+        context_filter: Optional[Dict[str, Any]] = None,
+        sort_by: str = "created_at",
+        sort_dir: str = "DESC"
     ) -> List[Dict[str, Any]]:
         """
         Get all activations created by user for a specific app with organization isolation
-        
+
         Args:
             app_id: ID of the app
             user_id: ID of the user who created the activations
             organization_id: Organization ID for isolation
             limit: Maximum number of results
             context_filter: Optional context filter
-            
+            sort_by: Field to sort by (default: created_at)
+            sort_dir: Sort direction - ASC or DESC (default: DESC)
+
         Returns:
             List of activation records created by the user for the app in the organization
         """
+        # Validate sort_by to prevent SQL injection
+        allowed_sort_fields = ['created_at', 'started_at', 'completed_at', 'status', 'activation_id']
+        if sort_by not in allowed_sort_fields:
+            sort_by = 'created_at'
+
+        # Validate sort_dir
+        sort_dir = sort_dir.upper()
+        if sort_dir not in ['ASC', 'DESC']:
+            sort_dir = 'DESC'
+
         # Build context filter conditions
         context_conditions = []
-        context_params = []
-        
+        params = {
+            "app_id": str(app_id),
+            "user_id": str(user_id),
+            "organization_id": str(organization_id),
+            "limit": limit
+        }
+
         if context_filter:
-            for key, value in context_filter.items():
-                if isinstance(value, str):
-                    context_conditions.append("JSON_EXTRACT(aa.context, ?) = ?")
-                    context_params.extend([f"$.{key}", value])
-                elif isinstance(value, (int, float)):
-                    context_conditions.append("JSON_EXTRACT(aa.context, ?) = ?")
-                    context_params.extend([f"$.{key}", value])
-        
+            for idx, (key, value) in enumerate(context_filter.items()):
+                if isinstance(value, (str, int, float)):
+                    # Cast TEXT to JSONB then use ->> operator for PostgreSQL
+                    context_conditions.append(f"(aa.context::jsonb)->>'{key}' = :context_value_{idx}")
+                    params[f"context_value_{idx}"] = str(value)
+
         context_clause = ""
         if context_conditions:
             context_clause = " AND " + " AND ".join(context_conditions)
-        
+
         query = f"""
-        SELECT aa.activation_id, aa.agent_id, aa.agent_type_id, aa.status, aa.started_at, 
-               aa.completed_at, aa.duration_ms, aa.input_data, aa.output_data, aa.context, 
+        SELECT aa.activation_id, aa.agent_id, aa.agent_type_id, aa.status, aa.started_at,
+               aa.completed_at, aa.duration_ms, aa.input_data, aa.output_data, aa.context,
                aa.metadata, aa.created_by, aa.created_at
         FROM agent_activations aa
-        JOIN app_installations ai ON ai.app_id = ?
-        WHERE aa.created_by = ? AND ai.organization_id = ?{context_clause}
-        ORDER BY aa.created_at DESC 
-        LIMIT ?
+        JOIN agents a ON aa.agent_id = a.agent_id
+        JOIN app_installations ai ON a.app_id = ai.app_id
+        WHERE a.app_id = :app_id AND aa.created_by = :user_id AND ai.organization_id = :organization_id{context_clause}
+        ORDER BY aa.{sort_by} {sort_dir}
+        LIMIT :limit
         """
-        
-        params = [str(app_id), int(user_id), str(organization_id)] + context_params + [limit]
-        
+
         try:
-            logger.debug(f"Getting activations for app {app_id}, user {user_id}, org {organization_id}")
-            logger.debug(f"Query: {query}")
-            logger.debug(f"Params: {params}")
-            
-            rows = await self.db.fetch_all(query, *params)
+            rows = await self.db.fetch_all(query, params)
             
             # Convert rows to dicts and parse JSON fields
             result = []
@@ -858,59 +882,73 @@ class AgentService(BaseService):
         user_id: int,
         organization_id: str,
         limit: int = 10,
-        context_filter: Optional[Dict[str, Any]] = None
+        context_filter: Optional[Dict[str, Any]] = None,
+        sort_by: str = "created_at",
+        sort_dir: str = "DESC"
     ) -> List[Dict[str, Any]]:
         """
         Get activations created by user for a specific agent with organization isolation
-        
+
         Args:
             agent_id: ID of the agent
             user_id: ID of the user who created the activations
             organization_id: Organization ID for isolation
             limit: Maximum number of results
             context_filter: Optional context filter
-            
+            sort_by: Field to sort by (default: created_at)
+            sort_dir: Sort direction - ASC or DESC (default: DESC)
+
         Returns:
             List of activation records created by the user for the agent in the organization
         """
+        # Validate sort_by to prevent SQL injection
+        allowed_sort_fields = ['created_at', 'started_at', 'completed_at', 'status', 'activation_id']
+        if sort_by not in allowed_sort_fields:
+            sort_by = 'created_at'
+
+        # Validate sort_dir
+        sort_dir = sort_dir.upper()
+        if sort_dir not in ['ASC', 'DESC']:
+            sort_dir = 'DESC'
+
         # Build context filter conditions
         context_conditions = []
-        context_params = []
-        
+        params = {
+            "agent_id": str(agent_id),
+            "agent_id_subquery": str(agent_id),
+            "created_by": int(user_id),
+            "organization_id": str(organization_id),
+            "limit": limit
+        }
+
         if context_filter:
-            for key, value in context_filter.items():
-                if isinstance(value, str):
-                    context_conditions.append("JSON_EXTRACT(aa.context, ?) = ?")
-                    context_params.extend([f"$.{key}", value])
-                elif isinstance(value, (int, float)):
-                    context_conditions.append("JSON_EXTRACT(aa.context, ?) = ?")
-                    context_params.extend([f"$.{key}", value])
-        
+            for idx, (key, value) in enumerate(context_filter.items()):
+                if isinstance(value, (str, int, float)):
+                    path_param = f"context_path_{idx}"
+                    value_param = f"context_value_{idx}"
+                    context_conditions.append(f"JSON_EXTRACT(aa.context, :{path_param}) = :{value_param}")
+                    params[path_param] = f"$.{key}"
+                    params[value_param] = value
+
         context_clause = ""
         if context_conditions:
             context_clause = " AND " + " AND ".join(context_conditions)
-        
+
         query = f"""
-        SELECT aa.activation_id, aa.agent_id, aa.agent_type_id, aa.status, aa.started_at, 
-               aa.completed_at, aa.duration_ms, aa.input_data, aa.output_data, aa.context, 
+        SELECT aa.activation_id, aa.agent_id, aa.agent_type_id, aa.status, aa.started_at,
+               aa.completed_at, aa.duration_ms, aa.input_data, aa.output_data, aa.context,
                aa.metadata, aa.created_by, aa.created_at
         FROM agent_activations aa
         JOIN app_installations ai ON ai.app_id = (
-            SELECT app_id FROM agents WHERE agent_id = ?
+            SELECT app_id FROM agents WHERE agent_id = :agent_id_subquery
         )
-        WHERE aa.agent_id = ? AND aa.created_by = ? AND ai.organization_id = ?{context_clause}
-        ORDER BY aa.created_at DESC 
-        LIMIT ?
+        WHERE aa.agent_id = :agent_id AND aa.created_by = :created_by AND ai.organization_id = :organization_id{context_clause}
+        ORDER BY aa.{sort_by} {sort_dir}
+        LIMIT :limit
         """
-        
-        params = [str(agent_id), str(agent_id), int(user_id), str(organization_id)] + context_params + [limit]
-        
+
         try:
-            logger.debug(f"Getting activations for agent {agent_id}, user {user_id}, org {organization_id}")
-            logger.debug(f"Query: {query}")
-            logger.debug(f"Params: {params}")
-            
-            rows = await self.db.fetch_all(query, *params)
+            rows = await self.db.fetch_all(query, params)
             
             # Convert rows to dicts and parse JSON fields
             result = []
@@ -946,9 +984,10 @@ class AgentService(BaseService):
             activation_id, agent_id, agent_type_id, status, started_at,
             input_data, context, metadata, created_by, organization_id, created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (:activation_id, :agent_id, :agent_type_id, :status, :started_at,
+                :input_data, :context, :metadata, :created_by, :organization_id, :created_at)
         """
-        
+
         try:
             started_at = datetime.now().isoformat()
             created_at = datetime.now().isoformat()
@@ -956,20 +995,20 @@ class AgentService(BaseService):
             organization_id = activation_data.get('organization_id')
             logger.info(f"Creating activation with organization_id: {organization_id} from activation_data: {activation_data}")
 
-            params = (
-                activation_id,
-                activation_data['agent_id'],
-                activation_data.get('agent_type_id', 'default'),
-                activation_data['status'],
-                started_at,
-                json.dumps(activation_data.get('input_data', {})),  # Convert dict to JSON string for database
-                json.dumps(activation_data.get('context', {})),    # Store context separately
-                json.dumps(activation_data.get('metadata', {})),   # Store metadata separately
-                created_by,
-                organization_id,
-                created_at
-            )
-            await self.db.execute(query, *params)
+            params = {
+                "activation_id": activation_id,
+                "agent_id": activation_data['agent_id'],
+                "agent_type_id": activation_data.get('agent_type_id', 'default'),
+                "status": activation_data['status'],
+                "started_at": started_at,
+                "input_data": json.dumps(activation_data.get('input_data', {})),
+                "context": json.dumps(activation_data.get('context', {})),
+                "metadata": json.dumps(activation_data.get('metadata', {})),
+                "created_by": created_by,
+                "organization_id": organization_id,
+                "created_at": created_at
+            }
+            await self.db.execute(query, params)
             
             # Return complete activation record for ActivationResponse validation
             return {
@@ -1004,22 +1043,22 @@ class AgentService(BaseService):
     async def update_activation(self, activation_id: str, update_data: Dict[str, Any]) -> None:
         """Update an activation record."""
         set_clauses = []
-        params = []
-        
+        params = {"activation_id": activation_id}
+        param_counter = 0
+
         for key, value in update_data.items():
+            param_name = f"param_{param_counter}"
+            set_clauses.append(f"{key} = :{param_name}")
             if key in ['output_data', 'error']:
-                set_clauses.append(f"{key} = ?")
-                params.append(json.dumps(value) if isinstance(value, (dict, list)) else value)
+                params[param_name] = json.dumps(value) if isinstance(value, (dict, list)) else value
             else:
-                set_clauses.append(f"{key} = ?")
-                params.append(value)
-        
-        params.append(activation_id)
-        
-        query = f"UPDATE agent_activations SET {', '.join(set_clauses)} WHERE activation_id = ?"
+                params[param_name] = value
+            param_counter += 1
+
+        query = f"UPDATE agent_activations SET {', '.join(set_clauses)} WHERE activation_id = :activation_id"
         
         try:
-            await self.db.execute(query, *params)
+            await self.db.execute(query, params)
         except Exception as e:
             logger.error(f"Error updating activation {activation_id}: {e}")
             raise
@@ -1044,8 +1083,8 @@ class AgentService(BaseService):
                 return False
             
             # Delete the activation
-            query = "DELETE FROM agent_activations WHERE activation_id = ?"
-            await self.db.execute(query, activation_id)
+            query = "DELETE FROM agent_activations WHERE activation_id = :activation_id"
+            await self.db.execute(query, {"activation_id": activation_id})
             
             logger.info(f"Deleted activation {activation_id}")
             return True

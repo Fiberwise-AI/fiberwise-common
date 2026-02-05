@@ -171,7 +171,7 @@ class AgentKeyService(BaseService):
                         resource_pattern, created_by
                     FROM agent_api_keys
                     WHERE key_value = :key_value AND is_active = true AND
-                        (expiration IS NULL OR expiration > NOW())
+                        (expiration IS NULL OR expiration::timestamp > NOW())
                 """
                 result = await self._fetch_one(query, {"key_value": agent_key})
             else:
@@ -182,7 +182,7 @@ class AgentKeyService(BaseService):
                         resource_pattern, created_by
                     FROM agent_api_keys
                     WHERE key_value = :key_value AND is_active = TRUE AND
-                        (expiration IS NULL OR datetime(expiration) > datetime('now'))
+                        (expiration IS NULL OR expiration::timestamp > NOW())
                 """
                 result = await self._fetch_one(query, {"key_value": agent_key})
             
@@ -237,7 +237,7 @@ class AgentKeyService(BaseService):
                 # SQLite syntax
                 query = """
                     UPDATE agent_api_keys
-                    SET is_active = 0, revoked_at = datetime('now')
+                    SET is_active = false, revoked_at = NOW()
                     WHERE key_id = :key_id
                 """
                 await self._execute_query(query, {"key_id": key_id})
@@ -291,7 +291,7 @@ class AgentKeyService(BaseService):
                 params["created_by"] = created_by
 
             if not include_inactive:
-                filters.append("is_active = 1" if not (hasattr(self.db, 'db_type') and self.db.db_type == 'postgresql') else "is_active = true")
+                filters.append("is_active = true")
 
             # Construct query
             query = """

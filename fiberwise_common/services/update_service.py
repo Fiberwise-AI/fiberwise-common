@@ -401,18 +401,18 @@ async def update_agent(conn, agent_id: str, agent_manifest: AgentManifest, curre
     class ConnectionWrapper:
         def __init__(self, connection):
             self.connection = connection
-        
-        async def fetch_val(self, query, *args):
-            return await self.connection.fetch_val(query, *args)
-        
-        async def fetch_one(self, query, *args):
-            return await self.connection.fetch_one(query, *args)
-        
-        async def fetch_all(self, query, *args):
-            return await self.connection.fetch_all(query, *args)
-        
-        async def execute(self, query, *args):
-            return await self.connection.execute(query, *args)
+
+        async def fetch_val(self, query, params):
+            return await self.connection.fetch_val(query, params)
+
+        async def fetch_one(self, query, params):
+            return await self.connection.fetch_one(query, params)
+
+        async def fetch_all(self, query, params):
+            return await self.connection.fetch_all(query, params)
+
+        async def execute(self, query, params):
+            return await self.connection.execute(query, params)
     
     db_wrapper = ConnectionWrapper(conn)
     service = UpdateService(db_wrapper)
@@ -435,19 +435,19 @@ async def update_pipeline(conn, pipeline_id: str, pipeline_manifest: PipelineMan
     class ConnectionWrapper:
         def __init__(self, connection):
             self.connection = connection
-        
-        async def fetch_val(self, query, *args):
-            return await self.connection.fetch_val(query, *args)
-        
-        async def fetch_one(self, query, *args):
-            return await self.connection.fetch_one(query, *args)
-        
-        async def fetch_all(self, query, *args):
-            return await self.connection.fetch_all(query, *args)
-        
-        async def execute(self, query, *args):
-            return await self.connection.execute(query, *args)
-    
+
+        async def fetch_val(self, query, params):
+            return await self.connection.fetch_val(query, params)
+
+        async def fetch_one(self, query, params):
+            return await self.connection.fetch_one(query, params)
+
+        async def fetch_all(self, query, params):
+            return await self.connection.fetch_all(query, params)
+
+        async def execute(self, query, params):
+            return await self.connection.execute(query, params)
+
     db_wrapper = ConnectionWrapper(conn)
     service = UpdateService(db_wrapper)
     return await service.update_pipeline(conn, pipeline_id, pipeline_manifest, current_user, app_id)
@@ -469,19 +469,19 @@ async def update_workflow(conn, workflow_id: str, workflow_manifest: WorkflowMan
     class ConnectionWrapper:
         def __init__(self, connection):
             self.connection = connection
-        
-        async def fetch_val(self, query, *args):
-            return await self.connection.fetch_val(query, *args)
-        
-        async def fetch_one(self, query, *args):
-            return await self.connection.fetch_one(query, *args)
-        
-        async def fetch_all(self, query, *args):
-            return await self.connection.fetch_all(query, *args)
-        
-        async def execute(self, query, *args):
-            return await self.connection.execute(query, *args)
-    
+
+        async def fetch_val(self, query, params):
+            return await self.connection.fetch_val(query, params)
+
+        async def fetch_one(self, query, params):
+            return await self.connection.fetch_one(query, params)
+
+        async def fetch_all(self, query, params):
+            return await self.connection.fetch_all(query, params)
+
+        async def execute(self, query, params):
+            return await self.connection.execute(query, params)
+
     db_wrapper = ConnectionWrapper(conn)
     service = UpdateService(db_wrapper)
     return await service.update_workflow(conn, workflow_id, workflow_manifest, current_user, app_id)
@@ -503,19 +503,19 @@ async def update_function(conn, function_id: str, function_manifest: FunctionMan
     class ConnectionWrapper:
         def __init__(self, connection):
             self.connection = connection
-        
-        async def fetch_val(self, query, *args):
-            return await self.connection.fetch_val(query, *args)
-        
-        async def fetch_one(self, query, *args):
-            return await self.connection.fetch_one(query, *args)
-        
-        async def fetch_all(self, query, *args):
-            return await self.connection.fetch_all(query, *args)
-        
-        async def execute(self, query, *args):
-            return await self.connection.execute(query, *args)
-    
+
+        async def fetch_val(self, query, params):
+            return await self.connection.fetch_val(query, params)
+
+        async def fetch_one(self, query, params):
+            return await self.connection.fetch_one(query, params)
+
+        async def fetch_all(self, query, params):
+            return await self.connection.fetch_all(query, params)
+
+        async def execute(self, query, params):
+            return await self.connection.execute(query, params)
+
     db_wrapper = ConnectionWrapper(conn)
     service = UpdateService(db_wrapper)
     return await service.update_function(conn, function_id, function_manifest, current_user, app_id)

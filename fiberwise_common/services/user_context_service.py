@@ -62,7 +62,7 @@ class FiberLocalContextService:
         # Cache user record to avoid repeated queries
         if self._current_user is None or self._current_user.get('id') != user_id:
             self._current_user = await self.db_provider.fetch_one(
-                "SELECT * FROM users WHERE id = ?", user_id
+                "SELECT * FROM users WHERE id = :user_id", {"user_id": user_id}
             )
         
         return self._current_user
@@ -78,8 +78,8 @@ class FiberLocalContextService:
             
             # Check if user exists
             user = await self.db_provider.fetch_one(
-                "SELECT id FROM users WHERE username = ?", 
-                system_username
+                "SELECT id FROM users WHERE username = :username",
+                {"username": system_username}
             )
             
             if user:

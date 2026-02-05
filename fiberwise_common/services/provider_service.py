@@ -68,8 +68,8 @@ class ProviderService(BaseService):
             if provider_type == "google":
                 template_provider_type = "gemini"  # Map google -> gemini for template lookup
             
-            default_query = "SELECT default_configuration FROM llm_provider_defaults WHERE provider_type = ?"
-            default_result = await self.db.fetch_one(default_query, template_provider_type)
+            default_query = "SELECT default_configuration FROM llm_provider_defaults WHERE provider_type = :provider_type"
+            default_result = await self.db.fetch_one(default_query, {"provider_type": template_provider_type})
             if default_result and default_result['default_configuration']:
                 default_config = json.loads(default_result['default_configuration'])
         except Exception as e:
@@ -89,16 +89,26 @@ class ProviderService(BaseService):
         config_data = {k: v for k, v in config_data.items() if v is not None}
         
         query = """
-            INSERT INTO llm_providers 
-            (provider_id, name, provider_type, api_endpoint, configuration, 
+            INSERT INTO llm_providers
+            (provider_id, name, provider_type, api_endpoint, configuration,
              default_model, created_by, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (:provider_id, :name, :provider_type, :api_endpoint, :configuration,
+                    :default_model, :created_by, :created_at, :updated_at)
         """
-        
+
         try:
             await self.db.execute(
-                query, provider_id, name, provider_type, base_url, json.dumps(config_data),
-                model, user_id, current_time, current_time
+                query, {
+                    "provider_id": provider_id,
+                    "name": name,
+                    "provider_type": provider_type,
+                    "api_endpoint": base_url,
+                    "configuration": json.dumps(config_data),
+                    "default_model": model,
+                    "created_by": user_id,
+                    "created_at": current_time,
+                    "updated_at": current_time
+                }
             )
             logger.info(f"Added provider configuration: {name} ({provider_type})")
             
@@ -113,12 +123,12 @@ class ProviderService(BaseService):
         """Get a specific provider configuration by name (with user isolation)."""
         if user_id is not None:
             # Filter by user ownership (system providers + user's own providers)
-            query = "SELECT * FROM llm_providers WHERE name = ? AND (is_system = true OR created_by = ?)"
-            result = await self.db.fetch_one(query, name, user_id)
+            query = "SELECT * FROM llm_providers WHERE name = :name AND (is_system = true OR created_by = :user_id)"
+            result = await self.db.fetch_one(query, {"name": name, "user_id": user_id})
         else:
             # Legacy mode without user filtering (for backwards compatibility)
-            query = "SELECT * FROM llm_providers WHERE name = ?"
-            result = await self.db.fetch_one(query, name)
+            query = "SELECT * FROM llm_providers WHERE name = :name"
+            result = await self.db.fetch_one(query, {"name": name})
         
         if result:
             config = dict(result)
@@ -147,17 +157,17 @@ class ProviderService(BaseService):
         
         try:
             if provider_type and user_id:
-                query = base_query + " AND provider_type = ? AND (created_by = ? OR is_system = true) ORDER BY created_at DESC"
-                results = await self.db.fetch_all(query, provider_type, user_id)
+                query = base_query + " AND provider_type = :provider_type AND (created_by = :user_id OR is_system = true) ORDER BY created_at DESC"
+                results = await self.db.fetch_all(query, {"provider_type": provider_type, "user_id": user_id})
             elif provider_type:
-                query = base_query + " AND provider_type = ? ORDER BY created_at DESC"
-                results = await self.db.fetch_all(query, provider_type)
+                query = base_query + " AND provider_type = :provider_type ORDER BY created_at DESC"
+                results = await self.db.fetch_all(query, {"provider_type": provider_type})
             elif user_id:
-                query = base_query + " AND (created_by = ? OR is_system = true) ORDER BY created_at DESC"
-                results = await self.db.fetch_all(query, user_id)
+                query = base_query + " AND (created_by = :user_id OR is_system = true) ORDER BY created_at DESC"
+                results = await self.db.fetch_all(query, {"user_id": user_id})
             else:
                 query = base_query + " ORDER BY created_at DESC"
-                results = await self.db.fetch_all(query)
+                results = await self.db.fetch_all(query, {})
             
             configs = []
             
@@ -183,11 +193,11 @@ class ProviderService(BaseService):
             # Wrap both operations in a transaction for atomicity
             async with self.db.transaction():
                 # First, unset all defaults
-                await self.db.execute("UPDATE llm_providers SET is_default = FALSE")
+                await self.db.execute("UPDATE llm_providers SET is_default = false", {})
 
                 # Then set the specified one as default
                 affected_rows = await self.db.execute(
-                    "UPDATE llm_providers SET is_default = TRUE WHERE name = ?", name
+                    "UPDATE llm_providers SET is_default = true WHERE name = :name", {"name": name}
                 )
                 
                 if affected_rows > 0:
@@ -214,26 +224,26 @@ class ProviderService(BaseService):
         """
         try:
             # Build base query with proper boolean handling and user isolation
-            base_conditions = "is_active = TRUE"
-            
+            base_conditions = "is_active = true"
+
             if user_id is not None:
                 # Filter by user ownership (system providers + user's own providers)
-                base_conditions += " AND (is_system = true OR created_by = ?)"
-                
+                base_conditions += " AND (is_system = true OR created_by = :user_id)"
+
                 if provider_type:
-                    query = f"SELECT * FROM llm_providers WHERE {base_conditions} AND provider_type = ? ORDER BY is_default DESC, created_at DESC LIMIT 1"
-                    result = await self.db.fetch_one(query, user_id, provider_type)
+                    query = f"SELECT * FROM llm_providers WHERE {base_conditions} AND provider_type = :provider_type ORDER BY is_default DESC, created_at DESC LIMIT 1"
+                    result = await self.db.fetch_one(query, {"user_id": user_id, "provider_type": provider_type})
                 else:
                     query = f"SELECT * FROM llm_providers WHERE {base_conditions} ORDER BY is_default DESC, created_at DESC LIMIT 1"
-                    result = await self.db.fetch_one(query, user_id)
+                    result = await self.db.fetch_one(query, {"user_id": user_id})
             else:
                 # Legacy mode without user filtering
                 if provider_type:
-                    query = f"SELECT * FROM llm_providers WHERE {base_conditions} AND provider_type = ? ORDER BY is_default DESC, created_at DESC LIMIT 1"
-                    result = await self.db.fetch_one(query, provider_type)
+                    query = f"SELECT * FROM llm_providers WHERE {base_conditions} AND provider_type = :provider_type ORDER BY is_default DESC, created_at DESC LIMIT 1"
+                    result = await self.db.fetch_one(query, {"provider_type": provider_type})
                 else:
                     query = f"SELECT * FROM llm_providers WHERE {base_conditions} ORDER BY is_default DESC, created_at DESC LIMIT 1"
-                    result = await self.db.fetch_one(query)
+                    result = await self.db.fetch_one(query, {})
                 
             if result:
                 config = dict(result)
@@ -267,13 +277,16 @@ class ProviderService(BaseService):
         # Separate direct columns from configuration data
         direct_columns = {'provider_type', 'api_endpoint', 'default_model', 'created_by', 'is_active', 'is_default'}
         updates = []
-        params = []
+        params = {}
+        param_counter = 0
         config_updates = {}
-        
+
         for key, value in kwargs.items():
             if key in direct_columns:
-                updates.append(f"{key} = ?")
-                params.append(value)
+                param_name = f"param_{param_counter}"
+                updates.append(f"{key} = :{param_name}")
+                params[param_name] = value
+                param_counter += 1
             else:
                 config_updates[key] = value
         
@@ -286,19 +299,21 @@ class ProviderService(BaseService):
                 config_data = current_config['configuration']
             else:
                 config_data = config_updates
-            
-            updates.append("configuration = ?")
-            params.append(json.dumps(config_data))
-        
+
+            param_name = f"param_{param_counter}"
+            updates.append(f"configuration = :{param_name}")
+            params[param_name] = json.dumps(config_data)
+            param_counter += 1
+
         # Add updated_at
-        updates.append("updated_at = ?")
-        params.append(datetime.now().isoformat())
-        
+        updates.append("updated_at = :updated_at")
+        params["updated_at"] = datetime.now().isoformat()
+
         # Add name for WHERE clause
-        params.append(name)
-        
-        query = f"UPDATE llm_providers SET {', '.join(updates)} WHERE name = ?"
-        
+        params["name"] = name
+
+        query = f"UPDATE llm_providers SET {', '.join(updates)} WHERE name = :name"
+
         try:
             result = await self.db.execute(query, params)
             if result.rowcount > 0:
@@ -316,7 +331,7 @@ class ProviderService(BaseService):
         """Delete a provider configuration."""
         try:
             result = await self.db.execute(
-                "DELETE FROM llm_providers WHERE name = ?", [name]
+                "DELETE FROM llm_providers WHERE name = :name", {"name": name}
             )
             
             if result.rowcount > 0:

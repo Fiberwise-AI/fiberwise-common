@@ -42,10 +42,16 @@ def create_cli_default_user(db_service, verbose: bool = False) -> Optional[int]:
         
         # Create user - use actual system username, not "admin"
         success = db_service.execute(
-            """INSERT INTO users (uuid, username, email, display_name, is_active, is_admin, created_at, updated_at) 
-               VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))""",
-            (user_uuid, system_username, user_email, 
-             system_username.title(), True, True)
+            """INSERT INTO users (uuid, username, email, display_name, is_active, is_admin, created_at, updated_at)
+               VALUES (:uuid, :username, :email, :display_name, :is_active, :is_admin, datetime('now'), datetime('now'))""",
+            {
+                "uuid": user_uuid,
+                "username": system_username,
+                "email": user_email,
+                "display_name": system_username.title(),
+                "is_active": True,
+                "is_admin": True
+            }
         )
         
         if not success:
@@ -55,8 +61,8 @@ def create_cli_default_user(db_service, verbose: bool = False) -> Optional[int]:
         
         # Get the user ID properly
         created_user = db_service.fetch_one(
-            "SELECT id FROM users WHERE username = ?", 
-            (system_username,)
+            "SELECT id FROM users WHERE username = :username",
+            {"username": system_username}
         )
         
         if created_user:
@@ -138,17 +144,23 @@ def create_cli_default_app(db_service, user_id: int, verbose: bool = False) -> O
             print(f"Creating FiberWise app: {app_name}")
         
         success = db_service.execute(
-            """INSERT INTO apps (app_id, app_slug, name, description, version, creator_user_id, created_at, updated_at) 
-               VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))""",
-            (CLI_APP_UUID, CLI_APP_SLUG, app_name, app_description, 
-             CLI_APP_VERSION, user_id)
+            """INSERT INTO apps (app_id, app_slug, name, description, version, creator_user_id, created_at, updated_at)
+               VALUES (:app_id, :app_slug, :name, :description, :version, :creator_user_id, datetime('now'), datetime('now'))""",
+            {
+                "app_id": CLI_APP_UUID,
+                "app_slug": CLI_APP_SLUG,
+                "name": app_name,
+                "description": app_description,
+                "version": CLI_APP_VERSION,
+                "creator_user_id": user_id
+            }
         )
         
         if success:
             # Get the app ID properly
             created_app = db_service.fetch_one(
-                "SELECT app_id FROM apps WHERE app_id = ?", 
-                (CLI_APP_UUID,)
+                "SELECT app_id FROM apps WHERE app_id = :app_id",
+                {"app_id": CLI_APP_UUID}
             )
             
             if created_app:

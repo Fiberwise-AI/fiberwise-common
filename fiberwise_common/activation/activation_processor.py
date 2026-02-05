@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, List, Union, Callable
 
 from fiberwise_common.database.provider import DatabaseProvider
+from fiberwise_common.llm.llm_provider_factory import LLMProviderFactory
 from ..services.service_registry import ServiceRegistry
 
 logger = logging.getLogger(__name__)
@@ -302,7 +303,7 @@ class ActivationProcessor:
                 INSERT INTO agent_api_keys (
                     key_id, app_id, agent_id, organization_id, key_value, is_active, is_revoked,
                     created_by, created_at, updated_at
-                ) VALUES (:key_id, :app_id, :agent_id, :organization_id, :api_key, 1, 0, :created_by, NOW(), NOW())
+                ) VALUES (:key_id, :app_id, :agent_id, :organization_id, :api_key, true, false, :created_by, NOW(), NOW())
             """
 
             import uuid
@@ -624,8 +625,8 @@ class ActivationProcessor:
                 # Extract just the filename from file_path
                 import os
                 filename = os.path.basename(file_path)
-                # Construct the full entity bundle path
-                entity_bundle_path = f"apps\\{app_id}\\agent\\{agent_id}\\{version_id}\\{filename}"
+                # Construct the full entity bundle path using os.path.join for cross-platform compatibility
+                entity_bundle_path = os.path.join("apps", app_id, "agent", agent_id, version_id, filename)
                 logger.info(f"[{self.context}] Constructed entity bundle path: {entity_bundle_path}")
                 
                 # Execute the custom agent
@@ -660,73 +661,70 @@ class ActivationProcessor:
     
     async def _execute_llm_agent(self, agent: Dict[str, Any], input_data: Dict[str, Any], activation: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Execute an LLM agent by creating a fresh LLM service per activation.
-        
+        Execute an LLM agent using the new LLMProviderFactory pattern.
+
         Args:
             agent: Agent record from database
             input_data: Input data to pass to the agent
             activation: Full activation record for context
-            
+
         Returns:
             Dictionary with execution results
         """
         start_time = datetime.now()
-        
-        try:
-            from fiberwise_common.services.llm_provider_service import LLMProviderService
-            
-            # Import the LLMServiceFactory from common and create per-activation instance
-            from fiberwise_common.services.llm_service_factory import LLMServiceFactory
 
+        try:
             logger.info(f"[{self.context}] === EXECUTING LLM AGENT ===")
-            
+
             # Get agent configuration
             agent_config = agent.get('config', {}) or {}
-            
+
             # Check activation metadata and context for provider information
             activation_metadata = activation.get('metadata', {}) or {}
             activation_context = activation.get('context', {}) or {}
-            
+
             # Look for provider information in activation metadata, then context, then agent config
             provider_id = activation_metadata.get('provider_id') or \
                           activation_context.get('provider_id') or \
                           agent_config.get('provider_id')
-            
-            # Create an LLMProviderService instance with the factory
-            llm_service = LLMProviderService(
-                db_provider=self.db,
-                user_id=activation.get('created_by'),
-                llm_service_factory=LLMServiceFactory
+
+            if not provider_id:
+                raise ValueError("No provider_id specified for LLM agent execution")
+
+            # Create ia_modules LLM provider using the factory
+            user_id = activation.get('created_by')
+            llm_provider = await LLMProviderFactory.create_from_db(
+                db=self.db,
+                provider_id=provider_id,
+                user_id=user_id
             )
-            logger.info(f"[{self.context}] Created LLMProviderService with injected factory.")
-            
+            logger.info(f"[{self.context}] Created LLM provider for provider_id={provider_id}, user_id={user_id}")
+
             # Get the agent's configuration or use defaults
             system_message = agent_config.get('system_message', agent.get('description', ''))
             model = agent_config.get('model')
-            
+
             # Prepare the prompt
             user_message = input_data.get('message', input_data.get('prompt', str(input_data)))
             if system_message:
                 combined_prompt = f"System: {system_message}\n\nUser: {user_message}"
             else:
                 combined_prompt = user_message
-            
-            # Execute the request. The LLMProviderService will handle provider selection
-            # based on the provider_id (or use default if None).
-            result = await llm_service.execute_llm_request(
-                provider_id=provider_id,
+
+            # Execute using ia_modules LLMProviderService
+            result = await llm_provider.execute_llm_request(
                 prompt=combined_prompt,
                 model=model
             )
-            
+
             response_text = result.get('text', str(result))
 
             # Calculate execution time
             end_time = datetime.now()
             execution_time_ms = int((end_time - start_time).total_seconds() * 1000)
-            
+
             logger.info(f"[{self.context}] LLM agent execution completed in {execution_time_ms}ms")
-            
+
             return {
                 'output_data': {
                     'response': response_text,
@@ -736,13 +734,13 @@ class ActivationProcessor:
                 'execution_time_ms': execution_time_ms,
                 'status': 'completed'
             }
-            
+
         except Exception as e:
             end_time = datetime.now()
             execution_time_ms = int((end_time - start_time).total_seconds() * 1000)
-            
+
             logger.error(f"[{self.context}] LLM agent execution failed after {execution_time_ms}ms: {str(e)}", exc_info=True)
-            
+
             return {
                 'output_data': None,
                 'execution_time_ms': execution_time_ms,
@@ -896,11 +894,11 @@ class ActivationProcessor:
                     else:
                         output_data = result
                         
-                # Pattern 2: Any class that inherits from FiberAgent with run method
+                # Pattern 2: Any class that inherits from FiberAgent - use execute() method
                 else:
                     # Look for any class that inherits from FiberAgent
                     agent_class = None
-                    
+
                     # Try to import FiberAgent for inheritance checking
                     try:
                         from fiberwise_sdk import FiberAgent
@@ -908,11 +906,11 @@ class ActivationProcessor:
                     except ImportError:
                         fiber_agent_available = False
                         logger.debug(f"[{self.context}] FiberAgent not available, falling back to exact class name matching")
-                    
+
                     # Scan module for classes
                     for attr_name in dir(agent_module):
                         attr = getattr(agent_module, attr_name)
-                        
+
                         # Check if it's a class
                         if isinstance(attr, type):
                             # If FiberAgent is available, check inheritance
@@ -926,33 +924,85 @@ class ActivationProcessor:
                                 agent_class = attr
                                 logger.info(f"[{self.context}] Found Agent class: {attr_name}")
                                 break
-                    
+
                     if agent_class:
                         agent_instance = agent_class()
-                        
-                        # Check for run_agent method (preferred for FiberAgent classes)
-                        if hasattr(agent_instance, 'run_agent'):
-                            logger.info(f"[{self.context}] Executing agent class run_agent method")
-                            
+
+                        # Use execute() method for FiberAgent classes
+                        if hasattr(agent_instance, 'execute'):
+                            logger.info(f"[{self.context}] Executing agent using execute() method")
+
+                            # Create activation service for dependency preparation with context
+                            service_registry = await self._create_activation_service(activation.get('context', {}), activation)
+                            if service_registry:
+                                # Extract app_id using the centralized method
+                                app_id = await self._extract_app_id_from_activation(activation)
+
+                                # Create comprehensive activation context
+                                activation_context = activation.get('context', {}).copy()
+                                activation_context['app_id'] = app_id
+                                activation_context['user_id'] = activation.get('created_by')
+
+                                # Populate _injected_services from service_registry - only get services that exist
+                                injected_services = {}
+
+                                # Add only context-aware services that are registered
+                                for service_name in ['fiber', 'llm_service', 'oauth_service']:
+                                    if service_registry.is_registered(service_name):
+                                        try:
+                                            service_instance = service_registry.get_service(service_name)
+                                            # Only inject if we got a valid service instance
+                                            if service_instance is not None:
+                                                injected_services[service_name] = service_instance
+                                                logger.debug(f"Injected context-aware service: {service_name}")
+                                            else:
+                                                logger.warning(f"Service '{service_name}' returned None - not injecting")
+                                        except KeyError as e:
+                                            logger.warning(f"Service '{service_name}' registered but failed to retrieve: {e}")
+                                    else:
+                                        logger.debug(f"Service '{service_name}' not registered - skipping")
+
+                                # Inject services into agent instance
+                                if injected_services:
+                                    agent_instance.inject_services(injected_services)
+                                    logger.info(f"[{self.context}] Injected services into agent: {list(injected_services.keys())}")
+
+                            # Extend input_data with context and metadata for agent access
+                            extended_input_data = input_data.copy()
+                            extended_input_data['_context'] = activation.get('context', {})
+                            extended_input_data['_metadata'] = activation.get('metadata', {})
+
+                            logger.info(f"[{self.context}] Extended input_data with context provider_id: {extended_input_data['_context'].get('provider_id')}")
+                            logger.info(f"[{self.context}] Extended input_data with metadata provider_id: {extended_input_data['_metadata'].get('provider_id')}")
+
+                            # Execute using the new execute() method
+                            logger.info(f"[{self.context}] Calling agent.execute() with input_data keys: {list(extended_input_data.keys())}")
+                            output_data = await agent_instance.execute(extended_input_data)
+                            logger.info(f"[{self.context}] Agent.execute() returned: {type(output_data)} - {str(output_data)[:200] if output_data else 'None'}")
+
+                        # Fallback to run_agent method for backward compatibility
+                        elif hasattr(agent_instance, 'run_agent'):
+                            logger.info(f"[{self.context}] Executing agent class run_agent method (legacy)")
+
                             # Use signature inspection for parameter-based injection
                             import inspect
                             run_agent_method = getattr(agent_instance, 'run_agent')
                             sig = inspect.signature(run_agent_method)
-                            
+
                             # Use activation service for dependency preparation with context
                             service_registry = await self._create_activation_service(activation.get('context', {}), activation)
                             if service_registry:
                                 # Extract app_id using the centralized method
                                 app_id = await self._extract_app_id_from_activation(activation)
-                                
+
                                 # Create comprehensive activation context
                                 activation_context = activation.get('context', {}).copy()
                                 activation_context['app_id'] = app_id
                                 activation_context['user_id'] = activation.get('created_by')
-                                
+
                                 # Populate _injected_services from service_registry - only get services that exist
                                 self._injected_services = {}
-                                
+
                                 # Add only context-aware services that are registered
                                 for service_name in ['fiber', 'llm_service', 'oauth_service']:
                                     if service_registry.is_registered(service_name):
@@ -968,94 +1018,32 @@ class ActivationProcessor:
                                             logger.warning(f"Service '{service_name}' registered but failed to retrieve: {e}")
                                     else:
                                         logger.debug(f"Service '{service_name}' not registered - skipping")
-                                
+
                                 dependencies = self._prepare_comprehensive_dependencies(sig.parameters)
                             else:
                                 # Fallback to old method if activation service creation fails
                                 dependencies = self._prepare_comprehensive_dependencies(sig.parameters)
-                            
+
                             logger.info(f"[{self.context}] Injecting services into run_agent method: {list(dependencies.keys())}")
-                            
+
                             # Extend input_data with context and metadata for agent access
                             extended_input_data = input_data.copy()
                             extended_input_data['_context'] = activation.get('context', {})
                             extended_input_data['_metadata'] = activation.get('metadata', {})
-                            
+
                             logger.info(f"[{self.context}] Extended input_data with context provider_id: {extended_input_data['_context'].get('provider_id')}")
                             logger.info(f"[{self.context}] Extended input_data with metadata provider_id: {extended_input_data['_metadata'].get('provider_id')}")
-                            
+
                             # Execute with parameter injection
                             result = run_agent_method(extended_input_data, **dependencies)
-                            
-                            # Handle async results
-                            if asyncio.iscoroutine(result):
-                                output_data = await result
-                            else:
-                                output_data = result
-                        # Fallback to run method for compatibility
-                        elif hasattr(agent_instance, 'run'):
-                            logger.info(f"[{self.context}] Executing agent class run method")
-                            
-                            # Use signature inspection for parameter-based injection
-                            import inspect
-                            run_method = getattr(agent_instance, 'run')
-                            sig = inspect.signature(run_method)
-                            
-                            # Use activation service for dependency preparation with context
-                            service_registry = await self._create_activation_service(activation.get('context', {}), activation)
-                            if service_registry:
-                                # Get app_id using the centralized method
-                                app_id = await self._extract_app_id_from_activation(activation)
-                                
-                                # Create comprehensive activation context
-                                activation_context = activation.get('context', {}).copy()
-                                activation_context['app_id'] = app_id
-                                activation_context['user_id'] = activation.get('created_by')
-                                
-                                # Populate _injected_services from service_registry - only get services that exist
-                                self._injected_services = {}
-                                
-                                # Add only context-aware services that are registered
-                                for service_name in ['fiber', 'llm_service', 'oauth_service']:
-                                    if service_registry.is_registered(service_name):
-                                        try:
-                                            service_instance = service_registry.get_service(service_name)
-                                            # Only inject if we got a valid service instance
-                                            if service_instance is not None:
-                                                self._injected_services[service_name] = service_instance
-                                                logger.debug(f"Injected context-aware service: {service_name}")
-                                            else:
-                                                logger.warning(f"Service '{service_name}' returned None - not injecting")
-                                        except KeyError as e:
-                                            logger.warning(f"Service '{service_name}' registered but failed to retrieve: {e}")
-                                    else:
-                                        logger.debug(f"Service '{service_name}' not registered - skipping")
-                                
-                                dependencies = self._prepare_comprehensive_dependencies(sig.parameters)
-                            else:
-                                # Fallback to old method if activation service creation fails
-                                dependencies = self._prepare_comprehensive_dependencies(sig.parameters)
-                            
-                            logger.info(f"[{self.context}] Injecting services into run method: {list(dependencies.keys())}")
-                            
-                            # Extend input_data with context and metadata for agent access
-                            extended_input_data = input_data.copy()
-                            extended_input_data['_context'] = activation.get('context', {})
-                            extended_input_data['_metadata'] = activation.get('metadata', {})
-                            
-                            logger.info(f"[{self.context}] Extended input_data with context provider_id: {extended_input_data['_context'].get('provider_id')}")
-                            logger.info(f"[{self.context}] Extended input_data with metadata provider_id: {extended_input_data['_metadata'].get('provider_id')}")
-                            
-                            # Execute with parameter injection
-                            result = run_method(extended_input_data, **dependencies)
-                            
+
                             # Handle async results
                             if asyncio.iscoroutine(result):
                                 output_data = await result
                             else:
                                 output_data = result
                         else:
-                            raise AttributeError(f"Agent class {agent_class.__name__} must have either a 'run_agent' or 'run' method")
+                            raise AttributeError(f"Agent class {agent_class.__name__} must have either an 'execute' or 'run_agent' method")
                     
                     # Pattern 3: Look for any callable that takes input_data
                     if output_data is None:
@@ -1077,7 +1065,7 @@ class ActivationProcessor:
                         if output_data is None:
                             raise AttributeError(
                                 "Agent must have either a 'run_agent' function, "
-                                "a FiberAgent subclass with 'run_agent' method, or a 'main'/'execute'/'process' function"
+                                "a FiberAgent subclass with 'execute' method, or a 'main'/'execute'/'process' function"
                             )
                 
                 # Calculate execution time

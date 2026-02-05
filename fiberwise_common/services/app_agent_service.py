@@ -70,7 +70,12 @@ class AppAgentService:
                         except (json.JSONDecodeError, TypeError):
                             # If parsing fails, keep it as a string or set to default
                             agent_dict[field] = {} if agent_dict[field] else None
-                
+
+                # Fix PostgreSQL datetime format for Pydantic (space->T, +00->+00:00)
+                for field in ['created_at', 'updated_at']:
+                    if field in agent_dict and isinstance(agent_dict[field], str):
+                        agent_dict[field] = agent_dict[field].replace(' ', 'T').replace('+00', '+00:00', 1)
+
                 agents.append(AgentResponse(**agent_dict))
                 
             return agents

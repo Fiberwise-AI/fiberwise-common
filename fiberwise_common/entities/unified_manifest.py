@@ -1,10 +1,120 @@
+from __future__ import annotations
+
 from typing import List, Dict, Any, Optional, Tuple
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+from pydantic import BaseModel, Field, field_validator, ConfigDict, model_validator
 from uuid import UUID
 import re
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _slugify(text: str) -> str:
+    """Convert text to URL-friendly slug."""
+    text = text.lower().strip()
+    text = re.sub(r'[^a-z0-9\s-]', '', text)
+    text = re.sub(r'[\s_-]+', '-', text)
+    return text.strip('-')
+
+
+def manifest_dict_to_unified(manifest_dict: Dict[str, Any]) -> UnifiedManifest:
+    """
+    Convert a raw manifest dictionary to a UnifiedManifest object.
+
+    This is the main entry point for parsing app manifests in any format
+    (YAML, JSON) into the unified structure for the FiberWise platform.
+
+    Supports:
+    - Legacy flat format (app_name, app_version at top level)
+    - New nested format (app: {...})
+    - ia_modules execution engine configuration
+    - All entity types: apps, agents, pipelines, workflows, functions
+    - Auto-generates slugs from names where not provided
+
+    Args:
+        manifest_dict: Raw manifest data from YAML/JSON file
+
+    Returns:
+        UnifiedManifest object ready for processing
+
+    Example:
+        >>> from fiberwise_common.utils.file_utils import load_manifest
+        >>> from fiberwise_common.entities.unified_manifest import manifest_dict_to_unified
+        >>> manifest_data = load_manifest(Path("app_manifest.yaml"))
+        >>> unified = manifest_dict_to_unified(manifest_data)
+        >>> unified.validate_all_versions()
+    """
+    normalized = _normalize_manifest_dict(manifest_dict)
+    return UnifiedManifest(**normalized)
+
+
+def _normalize_manifest_dict(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize manifest dict to UnifiedManifest format."""
+    normalized = dict(data)
+
+    if "app_name" in normalized or "app_version" in normalized:
+        app_data = {
+            "name": normalized.get("app_name", normalized.get("name", "Unknown")),
+            "version": normalized.get("app_version", normalized.get("version", "1.0.0")),
+            "description": normalized.get("description", ""),
+            "app_slug": normalized.get("app_slug", normalized.get("app_name", "").lower().replace(" ", "-")),
+            "entryPoint": normalized.get("entryPoint"),
+            "icon": normalized.get("icon"),
+            "category": normalized.get("category"),
+            "publisher": normalized.get("publisher"),
+            "user_isolation": normalized.get("user_isolation", "enforced"),
+        }
+        for old_field in ["app_name", "app_version"]:
+            normalized.pop(old_field, None)
+        normalized["app"] = app_data
+
+    app_version = normalized.get("app", {}).get("version", "1.0.0")
+
+    if "models" not in normalized or not isinstance(normalized.get("models"), list):
+        normalized["models"] = []
+
+    if "routes" not in normalized or not isinstance(normalized.get("routes"), list):
+        normalized["routes"] = []
+
+    for entity_type in ["agents", "pipelines", "workflows", "functions"]:
+        if entity_type not in normalized or not isinstance(normalized.get(entity_type), list):
+            normalized[entity_type] = []
+
+    for pipeline in normalized.get("pipelines", []):
+        if isinstance(pipeline, dict):
+            if pipeline.get("execution_engine") is None:
+                pipeline["execution_engine"] = "fiber-default"
+            if pipeline.get("version") is None:
+                pipeline["version"] = app_version
+            if pipeline.get("slug") is None:
+                pipeline["slug"] = _slugify(pipeline.get("name", ""))
+            if "is_active" not in pipeline:
+                pipeline["is_active"] = True
+            if "trigger_config" not in pipeline:
+                pipeline["trigger_config"] = {}
+            if "execution_config" not in pipeline:
+                pipeline["execution_config"] = {}
+
+    for agent in normalized.get("agents", []):
+        if isinstance(agent, dict) and agent.get("version") is None:
+            agent["version"] = app_version
+
+    for func in normalized.get("functions", []):
+        if isinstance(func, dict):
+            if func.get("version") is None:
+                func["version"] = app_version
+            if "tags" not in func:
+                func["tags"] = []
+            if "function_type" not in func:
+                func["function_type"] = "utility"
+            if "implementation" not in func:
+                func["implementation"] = None
+
+    for workflow in normalized.get("workflows", []):
+        if isinstance(workflow, dict) and workflow.get("version") is None:
+            workflow["version"] = app_version
+
+    return normalized
 
 class AppManifest(BaseModel):
     """App manifest model - basic version for now"""
@@ -29,19 +139,30 @@ class AgentManifest(BaseModel):
     implementation_path: Optional[str] = None
 
 class PipelineManifest(BaseModel):
-    """Pipeline manifest model"""
+    """Pipeline manifest model with support for multiple execution engines."""
     name: str
     version: str
     slug: Optional[str] = None
     description: Optional[str] = None
-    structure: Optional[dict] = None  # NEW: Graph-based pipeline definition
-    implementation_path: Optional[str] = None  # Legacy fallback, optional now
-    execution_engine: Optional[str] = "fiber-default"
-    pipeline_definition: Optional[str] = None  # Path to pipeline YAML/JSON file
+    structure: Optional[dict] = None
+    implementation_path: Optional[str] = None
+    execution_engine: str = "fiber-default"
+    pipeline_definition: Optional[str] = None
     engine_config: Optional[dict] = None
     input_schema: Optional[dict] = None
     output_schema: Optional[dict] = None
     is_async: Optional[bool] = True
+
+    @model_validator(mode='after')
+    def validate_engine_config(self):
+        """Validate engine-specific configuration."""
+        if self.execution_engine == "ia_modules":
+            if not self.structure and not self.pipeline_definition:
+                raise ValueError(
+                    "ia_modules pipelines require either 'structure' (graph definition) "
+                    "or 'pipeline_definition' (path to workflow file)"
+                )
+        return self
 
 class WorkflowManifest(BaseModel):
     """Workflow manifest model - basic version for now"""
