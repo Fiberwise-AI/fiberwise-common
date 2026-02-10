@@ -1,6 +1,6 @@
 [project]
 name = "fiberwise-common"
-version = "0.1.4"
+version = "0.1.5"
 description = "Common services and utilities for FiberWise applications"
 authors = [
     {name = "FiberWise", email = "dev@fiberwise.ai"},
@@ -19,6 +19,7 @@ classifiers = [
 ]
 
 dependencies = [
+    "ia_modules>=0.1.3",
     "pydantic>=2.0.0",
     "email-validator>=1.1.0",
     "pydantic-settings>=2.0",
