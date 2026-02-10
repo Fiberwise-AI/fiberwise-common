@@ -1,6 +1,6 @@
 [project]
 name = "fiberwise-common"
-version = "0.1.0"
+version = "0.1.4"
 description = "Common services and utilities for FiberWise applications"
 authors = [
     {name = "FiberWise", email = "dev@fiberwise.ai"},
