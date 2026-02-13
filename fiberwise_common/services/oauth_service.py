@@ -376,7 +376,7 @@ class OAuthService(BaseService):
         """Get OAuth session by state token."""
         query = """
             SELECT * FROM oauth_sessions
-            WHERE state_token = :state_token AND expires_at > datetime('now')
+            WHERE state_token = :state_token AND expires_at > CURRENT_TIMESTAMP
         """
 
         row = await self.db.fetch_one(query, {"state_token": state_token})
@@ -1132,7 +1132,7 @@ class OAuthService(BaseService):
         try:
             result = await self.db.execute("""
                 DELETE FROM oauth_sessions 
-                WHERE datetime(expires_at) < datetime('now')
+                WHERE expires_at < CURRENT_TIMESTAMP
             """)
             
             count = result if isinstance(result, int) else 0

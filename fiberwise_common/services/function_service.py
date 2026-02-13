@@ -315,23 +315,25 @@ class FunctionService:
         INSERT INTO function_executions (
             execution_id, function_id, input_data, status, started_at, created_by
         ) VALUES (
-            ?, ?, ?, ?, datetime('now'), ?
+            :execution_id, :function_id, :input_data, :status, CURRENT_TIMESTAMP, :created_by
         )
         """
-        
+
         created_by = user.id if user else None
         try:
             # Ensure input_data is properly serialized
             serialized_input = json.dumps(input_data)
             logger.info(f"Queuing function execution {execution_id} for function {function_name}")
-            
+
             await self.db.execute(
-                exec_query, 
-                execution_id,
-                function_id,
-                serialized_input,
-                "queued",
-                created_by
+                exec_query,
+                {
+                    "execution_id": execution_id,
+                    "function_id": function_id,
+                    "input_data": serialized_input,
+                    "status": "queued",
+                    "created_by": created_by
+                }
             )
             
             logger.info(f"Function {function_name} queued successfully with execution ID {execution_id}")

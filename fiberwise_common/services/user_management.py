@@ -43,7 +43,7 @@ def create_cli_default_user(db_service, verbose: bool = False) -> Optional[int]:
         # Create user - use actual system username, not "admin"
         success = db_service.execute(
             """INSERT INTO users (uuid, username, email, display_name, is_active, is_admin, created_at, updated_at)
-               VALUES (:uuid, :username, :email, :display_name, :is_active, :is_admin, datetime('now'), datetime('now'))""",
+               VALUES (:uuid, :username, :email, :display_name, :is_active, :is_admin, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)""",
             {
                 "uuid": user_uuid,
                 "username": system_username,
@@ -145,7 +145,7 @@ def create_cli_default_app(db_service, user_id: int, verbose: bool = False) -> O
         
         success = db_service.execute(
             """INSERT INTO apps (app_id, app_slug, name, description, version, creator_user_id, created_at, updated_at)
-               VALUES (:app_id, :app_slug, :name, :description, :version, :creator_user_id, datetime('now'), datetime('now'))""",
+               VALUES (:app_id, :app_slug, :name, :description, :version, :creator_user_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)""",
             {
                 "app_id": CLI_APP_UUID,
                 "app_slug": CLI_APP_SLUG,

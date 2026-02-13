@@ -52,7 +52,7 @@ class WorkflowManifest(BaseModel):
     is_enabled: bool = Field(default=True, description="Whether the workflow is enabled")
     
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "name": "Document Processing Workflow",
                 "description": "Processes documents through extraction, summarization and classification",
@@ -164,7 +164,7 @@ class WorkflowResponse(WorkflowBase):
     created_by: Optional[str] = None
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 class WorkflowExecuteRequest(BaseModel):
@@ -197,7 +197,7 @@ class WorkflowExecutionResponse(BaseModel):
     updated_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 class WorkflowExecutionListResponse(BaseModel):

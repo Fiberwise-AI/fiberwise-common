@@ -143,19 +143,42 @@ class OrganizationService:
 
     async def get_members(self, organization_id: int):
         """Get all organization members"""
-        query = """
+        # Use two queries to avoid GROUP_CONCAT (SQLite) vs STRING_AGG (PostgreSQL) issue
+        members_query = """
             SELECT om.user_id, u.username, u.email, u.display_name, om.role, om.status,
-                   om.joined_at, u.updated_at as last_active,
-                   GROUP_CONCAT(t.name) as teams
+                   om.joined_at, u.updated_at as last_active
             FROM organization_members om
             JOIN users u ON om.user_id = u.id
-            LEFT JOIN team_members tm ON om.user_id = tm.user_id
-            LEFT JOIN teams t ON tm.team_id = t.id AND t.organization_id = :organization_id
             WHERE om.organization_id = :organization_id AND om.status = 'active'
-            GROUP BY om.user_id
             ORDER BY om.role, u.username
         """
-        return await self.db.fetch_all(query, {"organization_id": organization_id})
+        members = await self.db.fetch_all(members_query, {"organization_id": organization_id})
+
+        # Get team memberships separately
+        teams_query = """
+            SELECT tm.user_id, t.name
+            FROM team_members tm
+            JOIN teams t ON tm.team_id = t.id
+            WHERE t.organization_id = :organization_id
+        """
+        team_rows = await self.db.fetch_all(teams_query, {"organization_id": organization_id})
+
+        # Build team lookup by user_id
+        team_lookup = {}
+        for row in team_rows:
+            uid = row['user_id']
+            if uid not in team_lookup:
+                team_lookup[uid] = []
+            team_lookup[uid].append(row['name'])
+
+        # Merge teams into members
+        result = []
+        for member in members:
+            m = dict(member)
+            m['teams'] = ','.join(team_lookup.get(m['user_id'], []))
+            result.append(m)
+
+        return result
 
     async def get_member_count(self, organization_id: int) -> int:
         """Get organization member count"""
@@ -285,15 +308,17 @@ class OrganizationService:
     async def get_teams(self, organization_id: int, user_id: int = 0):
         """Get organization teams"""
         query = """
-            SELECT t.*,
+            SELECT t.id, t.uuid, t.organization_id, t.name, t.description, t.color,
+                   t.is_default, t.created_by, t.created_at, t.updated_at,
                    COUNT(tm.user_id) as member_count,
-                   CASE WHEN tm_user.user_id IS NOT NULL THEN 1 ELSE 0 END as is_member,
-                   tm_user.role as user_role
+                   MAX(CASE WHEN tm_user.user_id IS NOT NULL THEN 1 ELSE 0 END) as is_member,
+                   MAX(tm_user.role) as user_role
             FROM teams t
             LEFT JOIN team_members tm ON t.id = tm.team_id
             LEFT JOIN team_members tm_user ON t.id = tm_user.team_id AND tm_user.user_id = :user_id
             WHERE t.organization_id = :organization_id
-            GROUP BY t.id
+            GROUP BY t.id, t.uuid, t.organization_id, t.name, t.description, t.color,
+                     t.is_default, t.created_by, t.created_at, t.updated_at
             ORDER BY t.is_default DESC, t.name
         """
         return await self.db.fetch_all(query, {"organization_id": organization_id, "user_id": user_id})
