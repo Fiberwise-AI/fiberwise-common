@@ -338,7 +338,7 @@ class AgentService(BaseService):
         # Create activation record
         activation_data = {
             'agent_id': agent_id,
-            'agent_type_id': agent.get('agent_type_id', 'default'),
+            'agent_type_id': agent.get('agent_type_id', 'llm'),
             'status': 'running',
             'input_data': input_data
         }
@@ -347,13 +347,8 @@ class AgentService(BaseService):
         activation_id = activation['activation_id']
         
         try:
-            # Handle different agent types
-            if agent.get('agent_type_id') == 'llm':
-                # Use LLM provider for LLM agents
-                result, error = await self._execute_llm_agent(agent, input_data, created_by)
-            else:
-                # Execute code for custom agents
-                result, error = await self._execute_agent_code(agent['code'], input_data)
+            # Execute code for agents (processor agents route through activation_processor)
+            result, error = await self._execute_agent_code(agent['code'], input_data)
             
             # Update activation with result
             if error:
@@ -418,78 +413,6 @@ class AgentService(BaseService):
         except Exception as e:
             logger.error(f"Error fetching activation {activation_id}: {e}")
             return None
-
-    async def _execute_llm_agent(self, agent: Dict[str, Any], activation_request: Dict[str, Any], created_by: int):
-        """
-        Execute LLM agent using provider service
-        
-        Args:
-            agent: Agent record with LLM configuration  
-            activation_request: Full activation request with input, context, metadata
-            created_by: User ID for LLM provider service context
-            
-        Returns:
-            Tuple of (result, error)
-        """
-        try:
-            from .llm_provider_service import LLMProviderService
-            from .llm_service_factory import LLMServiceFactory
-            
-            # Extract data from activation request structure
-            input_data = activation_request.get('input', {})
-            context = activation_request.get('context', {})
-            metadata = activation_request.get('metadata', {})
-            
-            # Get the user prompt
-            user_prompt = input_data.get('prompt', '')
-            if not user_prompt:
-                return None, "No prompt provided"
-            
-            # Get system prompt from context or agent
-            system_prompt = context.get('system_prompt') or agent.get('system_prompt', 'You are a helpful AI assistant.')
-            full_prompt = f"{system_prompt}\n\nUser: {user_prompt}\nAssistant:"
-            
-            # Get provider_id from context or metadata
-            provider_id = context.get('provider_id') or metadata.get('provider_id')
-            
-            # Get parameters from metadata or agent defaults
-            temperature = metadata.get('temperature') or agent.get('temperature', 0.7)
-            max_tokens = metadata.get('max_tokens') or agent.get('max_tokens', 2048)
-            model = agent.get('model')  # Let provider handle default model
-            
-            # Create LLM service instance with factory and user context
-            llm_service = LLMProviderService(self.db, user_id=created_by, llm_service_factory=LLMServiceFactory())
-            
-            # Execute the LLM request - only pass model if it exists
-            request_params = {
-                'prompt': full_prompt,
-                'provider_id': provider_id,
-                'temperature': temperature,
-                'max_tokens': max_tokens
-            }
-            if model:
-                request_params['model'] = model
-            
-            response = await llm_service.generate_completion(**request_params)
-            
-            if response.get('error'):
-                return None, response['error']
-            
-            # Debug: log the full response to see the structure
-            logger.info(f"LLM response structure: {response}")
-            
-            # Try different field names for the response content
-            content = (response.get('text') or 
-                      response.get('content') or 
-                      response.get('message') or 
-                      response.get('response') or 
-                      response.get('output', ''))
-            
-            return {'response': content}, None
-            
-        except Exception as e:
-            logger.error(f"Error executing LLM agent: {e}")
-            return None, str(e)
 
     async def _execute_agent_code(self, agent_code: str, input_data: Dict[str, Any]):
         """
@@ -998,7 +921,7 @@ class AgentService(BaseService):
             params = {
                 "activation_id": activation_id,
                 "agent_id": activation_data['agent_id'],
-                "agent_type_id": activation_data.get('agent_type_id', 'default'),
+                "agent_type_id": activation_data.get('agent_type_id', 'llm'),
                 "status": activation_data['status'],
                 "started_at": started_at,
                 "input_data": json.dumps(activation_data.get('input_data', {})),
@@ -1014,7 +937,7 @@ class AgentService(BaseService):
             return {
                 'activation_id': activation_id,
                 'agent_id': activation_data['agent_id'],
-                'agent_type_id': activation_data.get('agent_type_id', 'default'),
+                'agent_type_id': activation_data.get('agent_type_id', 'llm'),
                 'status': activation_data['status'],
                 'started_at': started_at,
                 'created_by': created_by,

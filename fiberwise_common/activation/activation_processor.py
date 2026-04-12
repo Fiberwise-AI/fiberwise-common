@@ -18,10 +18,81 @@ from pathlib import Path
 from typing import Any, Dict, Optional, List, Union, Callable
 
 from fiberwise_common.database.provider import DatabaseProvider
-from fiberwise_common.llm.llm_provider_factory import LLMProviderFactory
 from ..services.service_registry import ServiceRegistry
 
 logger = logging.getLogger(__name__)
+
+
+# ── Unified storage layout ────────────────────────────────────────────────
+# Single env var controls the root; subdirectories are convention:
+#   $FIBERWISE_DATA_DIR/
+#   ├── workspaces/{app_id}/    ← agent CWD (read/write), mountable
+#   ├── bundles/{app_id}/       ← deployed app bundles (pipeline defs, agent code)
+#   ├── logs/{activation_id}/   ← NDJSON logs per activation
+#   ├── system-apps/            ← system app bundles
+#   └── db/                     ← SQLite / state
+
+def get_data_dir() -> Path:
+    return Path(os.getenv("FIBERWISE_DATA_DIR", "_data")).resolve()
+
+
+def get_bundle_dir(app_id: str) -> Path:
+    bundles_dir = os.getenv("APP_BUNDLES_DIR")
+    if bundles_dir:
+        app_dir = Path(bundles_dir).resolve() / str(app_id)
+        if app_dir.exists():
+            version_dirs = sorted(
+                [d for d in app_dir.iterdir() if d.is_dir()],
+                key=lambda d: d.stat().st_mtime,
+                reverse=True,
+            )
+            if version_dirs:
+                dist_dir = version_dirs[0] / "dist"
+                if dist_dir.exists():
+                    return dist_dir
+                return version_dirs[0]
+            return app_dir
+    return get_data_dir() / "bundles" / str(app_id)
+
+
+def get_workspace_dir(app_id: str) -> Path:
+    d = get_data_dir() / "workspaces" / str(app_id)
+    os.makedirs(str(d), exist_ok=True)
+    return d
+
+
+def get_log_dir(activation_id: str) -> Path:
+    d = get_data_dir() / "logs" / str(activation_id)
+    os.makedirs(str(d), exist_ok=True)
+    return d
+
+
+def validate_agent_cwd(requested_cwd: str) -> str:
+    """Basic CWD validation — ensure the path is under FIBERWISE_DATA_DIR.
+
+    This is the Fiberwise-side foundation for the same check that the A2A
+    server performs via its own ALLOWED_CWD_ROOTS.  The heavy lifting
+    (tool/model allowlists, mode scope, bash policy) lives in the A2A
+    server's permissions module; here we only guard the filesystem root.
+
+    Returns the resolved absolute path on success, raises ValueError on
+    rejection.  If FIBERWISE_DATA_DIR is not set the check is skipped
+    (backwards compat with dev environments).
+    """
+    data_dir_env = os.getenv("FIBERWISE_DATA_DIR")
+    if not data_dir_env:
+        return requested_cwd  # unrestricted in dev
+    allowed_root = Path(data_dir_env).resolve()
+    resolved = Path(requested_cwd).resolve()
+    if not str(resolved).startswith(str(allowed_root)):
+        raise ValueError(
+            f"Agent CWD {resolved} is outside the allowed root {allowed_root}"
+        )
+    return str(resolved)
+
+
+# Token-based enforcement lives in ia_modules — single source of truth
+from ia_modules.agents.permissions import enforce_agent_claims  # noqa: E402
 
 
 class ActivationProcessor:
@@ -146,21 +217,28 @@ class ActivationProcessor:
             user_id = activation.get('created_by')
             
             if user_id and app_id:
-                # Create LLM service with user context
-                from ..services.llm_provider_service import LLMProviderService
-                from ..services.llm_service_factory import LLMServiceFactory
-                
-                llm_service_with_context = LLMProviderService(
-                    db_provider=self.db,
-                    user_id=user_id,
-                    llm_service_factory=LLMServiceFactory()
-                )
-                service_registry.register_service("llm_service", llm_service_with_context)
+                # Create LLM service with user context (optional — may not be needed for A2A/processor agents)
+                try:
+                    from ..services.llm_provider_service import LLMProviderService
+                    from ..services.llm_service_factory import LLMServiceFactory
+                    
+                    llm_service_with_context = LLMProviderService(
+                        db_provider=self.db,
+                        user_id=user_id,
+                        llm_service_factory=LLMServiceFactory()
+                    )
+                    service_registry.register_service("llm_service", llm_service_with_context)
+                    logger.info(f"Registered LLM service with user_id: {user_id}")
+                except Exception as llm_err:
+                    logger.warning(f"LLM service not available (A2A mode?): {llm_err}")
                 
                 # Create OAuth service with user context (if needed)
-                from ..services.oauth_service import OAuthService
-                oauth_service_with_context = OAuthService(db_provider=self.db)
-                service_registry.register_service("oauth_service", oauth_service_with_context)
+                try:
+                    from ..services.oauth_service import OAuthService
+                    oauth_service_with_context = OAuthService(db_provider=self.db)
+                    service_registry.register_service("oauth_service", oauth_service_with_context)
+                except Exception as oauth_err:
+                    logger.warning(f"OAuth service not available: {oauth_err}")
                 
                 logger.info(f"Registered context-aware services with user_id: {user_id}, app_id: {app_id}")
             else:
@@ -586,60 +664,191 @@ class ActivationProcessor:
                 except json.JSONDecodeError:
                     input_data = {}
             
-            # Route based on agent type
-            # Use agent_type_id if available, fallback to type field
+            # Route based on what the agent has, not agent_type_id
             agent_type = agent.get('agent_type_id') or agent.get('type', '')
-            agent_type = agent_type.lower()
             logger.info(f"[{self.context}] Agent type: {agent_type}")
-            
-            if agent_type == 'llm':
-                # Route to LLM API provider with per-activation service
-                execution_result = await self._execute_llm_agent(agent, input_data, activation)
-            else:
-                # Route to custom code execution
+
+            agent_config = agent.get('config', {}) or {}
+            if isinstance(agent_config, str):
+                try:
+                    agent_config = json.loads(agent_config)
+                except json.JSONDecodeError:
+                    agent_config = {}
+
+            app_id = await self._extract_app_id_from_activation(activation)
+            start_time = datetime.now()
+
+            # ── Resolve provider config ──────────────────────────────────
+            # provider_id is the source of truth for execution config:
+            #   cli_type (SDK), provider (backend), model, api_key
+            # Provider values override agent_config defaults.
+            provider_id = (
+                activation.get('metadata', {}).get('provider_id')
+                or activation.get('context', {}).get('provider_id')
+                or agent_config.get('provider_id')
+            )
+
+            if provider_id:
+                provider = await self._get_provider_config(provider_id)
+                if provider:
+                    pconfig = provider.get('configuration', {}) or {}
+                    # Provider drives execution — merge into agent_config
+                    for key in ('cli_type', 'provider', 'model', 'api_key'):
+                        if pconfig.get(key):
+                            agent_config[key] = pconfig[key]
+                    # Also pull default_model as model if model not explicitly set
+                    if not agent_config.get('model') and pconfig.get('default_model'):
+                        agent_config['model'] = pconfig['default_model']
+                    logger.info(
+                        f"[{self.context}] Provider {provider_id} resolved: "
+                        f"cli_type={agent_config.get('cli_type')}, "
+                        f"provider={agent_config.get('provider')}, "
+                        f"model={agent_config.get('model')}"
+                    )
+                else:
+                    logger.warning(f"[{self.context}] Provider {provider_id} not found or inactive")
+
+            # ── Agent dispatch ─────────────────────────────────────────
+            # Everything is A2A (subprocess or remote). The dispatch
+            # determines which execution path to use:
+            #
+            #   1. llm agent type           → LLMStep (prompt in, text out via subprocess)
+            #   2. Python implementation    → custom agent code (FiberAgent classes)
+            #   3. pipeline_definition      → ia_modules pipeline (multi-step)
+            #   4. cli_type (non-llm)       → direct A2A delegation (subprocess or remote)
+            #   5. fallback                 → LLMStep
+
+            # 1. LLM agent — use LLMStep which handles subprocess, logging, result extraction
+            if agent_type in ('llm', 'default', ''):
+                logger.info(f"[{self.context}] Agent type '{agent_type}' — running LLMStep")
+
+                system_prompt = (
+                    agent_config.get('system_prompt')
+                    or input_data.get('system_prompt')
+                    or activation.get('context', {}).get('system_prompt')
+                    or 'You are a helpful AI assistant.'
+                )
+
+                log_dir = get_log_dir(activation_id)
+                workspace = get_workspace_dir(app_id) if app_id else Path.cwd()
+                cwd = validate_agent_cwd(str(workspace))
+
+                llm_pipeline_config = {
+                    'steps': [{
+                        'name': 'llm_response',
+                        'type': 'LLMStep',
+                        'config': {
+                            'system_prompt': system_prompt,
+                            'temperature': agent_config.get('temperature', 0.7),
+                            'max_tokens': agent_config.get('max_tokens', 2048),
+                            'model': agent_config.get('model'),
+                            'provider': agent_config.get('provider'),
+                            'cli_type': agent_config.get('cli_type', 'opencode'),
+                            'api_key': agent_config.get('api_key'),
+                            'cwd': cwd,
+                            'logs_dir': str(log_dir),
+                        }
+                    }]
+                }
+                result = await self._execute_llm_step(
+                    llm_pipeline_config, input_data, activation, agent_config
+                )
+                end_time = datetime.now()
+                execution_time_ms = int((end_time - start_time).total_seconds() * 1000)
+                execution_result = {
+                    'output_data': result,
+                    'execution_time_ms': execution_time_ms,
+                    'status': 'completed'
+                }
+
+            # 2. Python implementation — prefer FiberAgent code when it exists
+            elif await self._has_python_implementation(agent_id):
                 version = await self._get_agent_version(agent_id, activation.get('version', 'latest'))
                 if not version:
                     raise ValueError(f"No version found for agent {agent_id}")
-                    
+
                 file_path = version.get('file_path')
                 if not file_path:
                     raise ValueError(f"No file path found for agent version")
-                
-                # Construct entity bundle path using IDs
-                # Real path structure: apps/{app_id}/agent/{agent_id}/{version_id}/{filename}
-                
-                # Extract app_id using the centralized method
-                app_id = await self._extract_app_id_from_activation(activation)
-                
-                version_id = version.get('version_id')  # Get version_id from agent_versions
-                
-                logger.info(f"[{self.context}] Debug - activation keys: {list(activation.keys())}")
-                logger.info(f"[{self.context}] Debug - version keys: {list(version.keys())}")
-                logger.info(f"[{self.context}] Debug - app_id: {app_id}, version_id: {version_id}")
-                
+
+                version_id = version.get('version_id')
                 if not app_id:
                     raise ValueError(f"Missing app_id - not found in activation record, context, or agents table")
                 if not version_id:
                     raise ValueError(f"Missing version_id in agent version record")
-                
-                # Extract just the filename from file_path
-                import os
+
                 filename = os.path.basename(file_path)
-                # Construct the full entity bundle path using os.path.join for cross-platform compatibility
                 entity_bundle_path = os.path.join("apps", app_id, "agent", agent_id, version_id, filename)
-                logger.info(f"[{self.context}] Constructed entity bundle path: {entity_bundle_path}")
-                
-                # Execute the custom agent
+                logger.info(f"[{self.context}] Executing agent code from entity bundle: {entity_bundle_path}")
+
                 execution_result = await self._execute_custom_agent(entity_bundle_path, input_data, activation)
-            
-            # Update activation with results
+
+            # 3. ia_modules pipeline — processor agent type or explicit pipeline_definition
+            elif agent_type == 'processor' or agent_config.get('pipeline_definition'):
+                execution_result = await self._execute_pipeline_agent(agent, agent_config, input_data, activation, app_id)
+
+            # 4. Direct A2A delegation — non-llm agent with cli_type
+            elif agent_config.get('cli_type'):
+                workspace = get_workspace_dir(app_id) if app_id else Path.cwd()
+                cwd = validate_agent_cwd(str(workspace))
+                log_dir = get_log_dir(activation_id)
+                execution_result = await self._delegate_to_a2a(
+                    agent, agent_config, input_data, activation_id,
+                    app_id, cwd, str(log_dir), start_time,
+                )
+
+            # 5. Fallback — treat as LLM
+            else:
+                logger.warning(
+                    f"[{self.context}] Agent {agent_id} type '{agent_type}' has no specific handler — "
+                    f"falling back to LLM step execution"
+                )
+                system_prompt = (
+                    agent_config.get('system_prompt')
+                    or input_data.get('system_prompt')
+                    or activation.get('context', {}).get('system_prompt')
+                    or 'You are a helpful AI assistant.'
+                )
+                log_dir = get_log_dir(activation_id)
+                workspace = get_workspace_dir(app_id) if app_id else Path.cwd()
+                cwd = validate_agent_cwd(str(workspace))
+                llm_pipeline_config = {
+                    'steps': [{
+                        'name': 'llm_response',
+                        'type': 'LLMStep',
+                        'config': {
+                            'system_prompt': system_prompt,
+                            'temperature': agent_config.get('temperature', 0.7),
+                            'max_tokens': agent_config.get('max_tokens', 2048),
+                            'model': agent_config.get('model'),
+                            'provider': agent_config.get('provider'),
+                            'cli_type': agent_config.get('cli_type', 'opencode'),
+                            'api_key': agent_config.get('api_key'),
+                            'cwd': cwd,
+                            'logs_dir': str(log_dir),
+                        }
+                    }]
+                }
+                result = await self._execute_llm_step(
+                    llm_pipeline_config, input_data, activation, agent_config
+                )
+                end_time = datetime.now()
+                execution_time_ms = int((end_time - start_time).total_seconds() * 1000)
+                execution_result = {
+                    'output_data': result,
+                    'execution_time_ms': execution_time_ms,
+                    'status': 'completed'
+                }
+
+            # Update activation with results — use the status from execution_result
+            final_status = execution_result.get('status', 'completed')
             await self._update_activation_status(
-                activation_id, 
-                'completed',
+                activation_id,
+                final_status,
                 output_data=execution_result.get('output_data'),
                 execution_time_ms=execution_result.get('execution_time_ms')
             )
-            
+
             logger.info(f"[{self.context}] Successfully completed activation {activation_id}")
             
             # Return updated activation
@@ -659,78 +868,79 @@ class ActivationProcessor:
             # Return updated activation with error
             return await self._get_activation(activation_id)
     
-    async def _execute_llm_agent(self, agent: Dict[str, Any], input_data: Dict[str, Any], activation: Dict[str, Any]) -> Dict[str, Any]:
+    async def _execute_pipeline_agent(self, agent: Dict[str, Any], agent_config: Dict[str, Any], input_data: Dict[str, Any], activation: Dict[str, Any], app_id: str) -> Dict[str, Any]:
         """
-        Execute an LLM agent using the new LLMProviderFactory pattern.
+        Execute a pipeline-only agent.
 
-        Args:
-            agent: Agent record from database
-            input_data: Input data to pass to the agent
-            activation: Full activation record for context
-
-        Returns:
-            Dictionary with execution results
+        For simple LLM pipelines (type: LLMStep), executes the LLM call directly
+        using the platform's LLMProviderService.  For real ia_modules pipelines
+        (with step_class references), delegates to GraphPipelineRunner.
         """
         start_time = datetime.now()
 
         try:
-            logger.info(f"[{self.context}] === EXECUTING LLM AGENT ===")
+            logger.info(f"[{self.context}] === EXECUTING PIPELINE AGENT ===")
 
-            # Get agent configuration
-            agent_config = agent.get('config', {}) or {}
+            bundle_dir = get_bundle_dir(app_id) if app_id else Path(os.getenv("APP_BUNDLES_DIR", "app_bundles"))
+            pipeline_def = agent_config.get('pipeline_definition')
+            pipeline_path = bundle_dir / pipeline_def
 
-            # Check activation metadata and context for provider information
-            activation_metadata = activation.get('metadata', {}) or {}
-            activation_context = activation.get('context', {}) or {}
+            if not pipeline_path.exists():
+                raise ValueError(f"Pipeline definition not found: {pipeline_path}")
 
-            # Look for provider information in activation metadata, then context, then agent config
-            provider_id = activation_metadata.get('provider_id') or \
-                          activation_context.get('provider_id') or \
-                          agent_config.get('provider_id')
+            # Load pipeline YAML/JSON
+            import yaml as yaml_lib
+            with open(pipeline_path, 'r') as f:
+                pipeline_config = yaml_lib.safe_load(f)
 
-            if not provider_id:
-                raise ValueError("No provider_id specified for LLM agent execution")
+            logger.info(f"[{self.context}] Loaded pipeline config from {pipeline_path}")
 
-            # Create ia_modules LLM provider using the factory
-            user_id = activation.get('created_by')
-            llm_provider = await LLMProviderFactory.create_from_db(
-                db=self.db,
-                provider_id=provider_id,
-                user_id=user_id
-            )
-            logger.info(f"[{self.context}] Created LLM provider for provider_id={provider_id}, user_id={user_id}")
+            # Check if this is a simple LLM pipeline (type: LLMStep) — handle directly
+            steps = pipeline_config.get('steps', [])
+            is_simple_llm = all(
+                s.get('type') == 'LLMStep' or s.get('step_class') == 'LLMStep'
+                for s in steps
+            ) if steps else False
 
-            # Get the agent's configuration or use defaults
-            system_message = agent_config.get('system_message', agent.get('description', ''))
-            model = agent_config.get('model')
-
-            # Prepare the prompt
-            user_message = input_data.get('message', input_data.get('prompt', str(input_data)))
-            if system_message:
-                combined_prompt = f"System: {system_message}\n\nUser: {user_message}"
+            if is_simple_llm:
+                result = await self._execute_llm_step(
+                    pipeline_config, input_data, activation, agent_config
+                )
             else:
-                combined_prompt = user_message
+                # Real ia_modules pipeline with custom step classes
+                default_model = await self._resolve_default_model()
+                if default_model:
+                    pipeline_config = self._resolve_model_templates(pipeline_config, default_model)
 
-            # Execute using ia_modules LLMProviderService
-            result = await llm_provider.execute_llm_request(
-                prompt=combined_prompt,
-                model=model
-            )
+                from ia_modules.pipeline.graph_pipeline_runner import GraphPipelineRunner
+                runner = GraphPipelineRunner()
 
-            response_text = result.get('text', str(result))
+                if self._injected_services:
+                    for name, svc in self._injected_services.items():
+                        if svc is not None:
+                            runner.services.register(name, svc)
 
-            # Calculate execution time
+                try:
+                    service_registry = await self._create_activation_service(
+                        activation.get('context', {}), activation
+                    )
+                    if service_registry:
+                        for svc_name in ['fiber', 'llm_service', 'oauth_service']:
+                            if service_registry.is_registered(svc_name):
+                                svc = service_registry.get_service(svc_name)
+                                if svc is not None:
+                                    runner.services.register(svc_name, svc)
+                except Exception as svc_err:
+                    logger.warning(f"[{self.context}] Could not inject activation services: {svc_err}")
+
+                result = await runner.run_pipeline_from_json(pipeline_config, input_data)
+
             end_time = datetime.now()
             execution_time_ms = int((end_time - start_time).total_seconds() * 1000)
-
-            logger.info(f"[{self.context}] LLM agent execution completed in {execution_time_ms}ms")
+            logger.info(f"[{self.context}] Pipeline agent completed in {execution_time_ms}ms")
 
             return {
-                'output_data': {
-                    'response': response_text,
-                    'model_used': model,
-                    'agent_type': 'llm'
-                },
+                'output_data': result,
                 'execution_time_ms': execution_time_ms,
                 'status': 'completed'
             }
@@ -738,15 +948,239 @@ class ActivationProcessor:
         except Exception as e:
             end_time = datetime.now()
             execution_time_ms = int((end_time - start_time).total_seconds() * 1000)
-
-            logger.error(f"[{self.context}] LLM agent execution failed after {execution_time_ms}ms: {str(e)}", exc_info=True)
-
+            logger.error(f"[{self.context}] Pipeline agent failed after {execution_time_ms}ms: {e}", exc_info=True)
             return {
                 'output_data': None,
                 'execution_time_ms': execution_time_ms,
                 'status': 'failed',
                 'error': str(e)
             }
+
+    async def _execute_llm_step(
+        self, pipeline_config: Dict[str, Any], input_data: Dict[str, Any],
+        activation: Dict[str, Any], agent_config: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Execute a simple LLM pipeline by running LLMStep directly as a step.
+
+        An agent activation IS a step execution. For pipelines where all steps
+        are type: LLMStep, we instantiate and run each LLMStep directly —
+        no pipeline wrapper needed. LLMStep extends AgentStep so it spawns
+        a CLI agent (via A2A/subprocess) under the hood.
+        """
+        steps = pipeline_config.get('steps', [])
+        if not steps:
+            raise ValueError("Pipeline config has no steps")
+
+        # Resolve model templates before step execution
+        default_model = await self._resolve_default_model()
+        if default_model:
+            pipeline_config = self._resolve_model_templates(pipeline_config, default_model)
+            steps = pipeline_config.get('steps', [])
+
+        # LLMStep extends AgentStep, which requires services['agent_executor']
+        # to be a shared SubprocessExecutor. Since we're running the step
+        # directly (no Pipeline wrapper to inject services), we build the
+        # same single-executor dict that _delegate_to_a2a uses for its
+        # subprocess path and pass it to each step before run().
+        from ia_modules.agents.subprocess_executor import SubprocessExecutor
+        from ia_modules.pipeline.llm_step import LLMStep
+        step_services = {"agent_executor": SubprocessExecutor()}
+
+        # Run each step sequentially (most LLM pipelines have one step)
+        result = {}
+        for step_def in steps:
+            step_config = step_def.get('config', {})
+
+            # Merge agent_config into step_config (agent-level overrides)
+            if agent_config.get('cli_type'):
+                step_config.setdefault('cli_type', agent_config['cli_type'])
+            if agent_config.get('model'):
+                step_config['model'] = agent_config['model']
+            if agent_config.get('provider'):
+                step_config['provider'] = agent_config['provider']
+
+            step_name = step_def.get('name', step_def.get('id', 'llm_step'))
+
+            # Instantiate and run the LLMStep directly — no pipeline wrapper
+            llm_step = LLMStep(step_name, step_config)
+            llm_step.services = step_services
+
+            # Build input data from activation input + step input mappings
+            step_input = input_data.copy()
+            step_input['_activation_id'] = activation.get('activation_id')
+
+            result = await llm_step.run(step_input)
+
+        return result
+
+    async def _resolve_default_model(self) -> Optional[str]:
+        """Get the default model name from the platform's default LLM provider."""
+        try:
+            query = """
+                SELECT configuration FROM llm_providers
+                WHERE is_default = TRUE AND is_active = TRUE
+                LIMIT 1
+            """
+            result = await self.db.fetch_one(query, {})
+            if result:
+                config = result.get('configuration', '{}')
+                if isinstance(config, str):
+                    config = json.loads(config)
+                return config.get('default_model') or config.get('model')
+            # Fallback: check the provider record's dedicated default_model column.
+            # The schema does not have a `model` column — use `default_model`.
+            query2 = "SELECT default_model FROM llm_providers WHERE is_default = TRUE AND is_active = TRUE LIMIT 1"
+            result2 = await self.db.fetch_one(query2, {})
+            if result2:
+                return result2.get('default_model')
+        except Exception as e:
+            logger.warning(f"[{self.context}] Could not resolve default model: {e}")
+        return None
+
+    def _resolve_model_templates(self, config: Any, model: str) -> Any:
+        """Replace ${MODEL:-default} shell-style templates in pipeline config with actual model."""
+        import re
+        if isinstance(config, dict):
+            return {k: self._resolve_model_templates(v, model) for k, v in config.items()}
+        elif isinstance(config, list):
+            return [self._resolve_model_templates(item, model) for item in config]
+        elif isinstance(config, str):
+            # Match ${MODEL:-fallback} or ${MODEL} patterns
+            return re.sub(r'\$\{MODEL(?::-[^}]*)?\}', model, config)
+        return config
+
+    async def _delegate_to_a2a(self, agent, agent_config, input_data, activation_id, app_id, cwd: str, log_dir: str, start_time):
+        """Delegate agent execution via A2A — subprocess or remote.
+
+        Subprocess A2A (default): spawns CLI agent directly via ia_modules SubprocessExecutor.
+        Remote A2A: HTTP to an A2A server when A2A_SERVER_URL is set.
+
+        Args:
+            cwd: Pre-validated workspace directory for the agent.
+            log_dir: Per-activation log directory for NDJSON output.
+        """
+        task = input_data.get('message', input_data.get('prompt', str(input_data)))
+        a2a_server_url = os.getenv("A2A_SERVER_URL")
+
+        collected_events = []
+
+        # ── Auth gate — issue and validate JWT before any executor ──
+        from fiberwise_common.oidc_provider import get_adapter
+        adapter = get_adapter(db=self.db)
+        _agent_id = agent.get('agent_id')
+        if not _agent_id:
+            raise ValueError("agent_id is required for A2A delegation")
+
+        auth_token = await adapter.issue_token_for_agent(str(_agent_id))
+        claims = await adapter.validate_token(auth_token)
+        logger.info(
+            f"[{self.context}] Agent {_agent_id} authorized: "
+            f"scopes={claims.get('scope')}, a2a={claims.get('a2a')}"
+        )
+
+        # ── Enforce claims against execution context ──
+        enforce_agent_claims(claims, cwd)
+
+        if a2a_server_url:
+            # ── Remote A2A — fire-and-forget to external server ──
+            logger.info(f"[{self.context}] Remote A2A via {a2a_server_url}")
+            from ia_modules.agents.executor import AgentConfig as IAAgentConfig, CLIType, AgentMode
+            from ia_modules.agents.a2a_executor import A2AExecutor
+
+            cli_str = agent_config.get('cli_type', 'claude_code')
+            mode_str = agent_config.get('mode', 'research')
+            cli_map = {"claude_code": CLIType.CLAUDE_CODE, "opencode": CLIType.OPENCODE}
+            mode_map = {"research": AgentMode.RESEARCH, "execute": AgentMode.EXECUTE, "plan": AgentMode.PLAN}
+
+            ia_config = IAAgentConfig(
+                task=task,
+                cwd=cwd,
+                cli_type=cli_map.get(cli_str, CLIType.CLAUDE_CODE),
+                mode=mode_map.get(mode_str, AgentMode.RESEARCH),
+                tools=agent_config.get('tools') or ["Read", "Glob", "Grep"],
+                system_prompt=agent_config.get('system_prompt'),
+                model=agent_config.get('model'),
+                provider=agent_config.get('provider'),
+                api_key=agent_config.get('api_key'),
+                agent_id=agent.get('agent_id'),
+                job_id=activation_id,
+                chat_history=agent_config.get('chat_history'),
+                metadata=agent_config.get('metadata', {}),
+            )
+
+            # Build callback URL so A2A server POSTs events back to us
+            callback_url = None
+            base_url = os.getenv("FIBERWISE_BASE_URL")
+            if base_url:
+                callback_url = f"{base_url}/a2a/events/push"
+
+            executor = A2AExecutor(a2a_url=a2a_server_url, callback_url=callback_url, auth_token=auth_token)
+            async for event in executor.execute(ia_config):
+                event_dict = event.to_dict()
+                collected_events.append(event_dict)
+                if self._notification_callback:
+                    await self._notification_callback(activation_id, event_dict)
+        else:
+            # ── Subprocess A2A — spawn CLI agent directly ──
+            logger.info(
+                f"[{self.context}] Subprocess A2A: cli_type={agent_config.get('cli_type')}, "
+                f"provider={agent_config.get('provider')}, model={agent_config.get('model')}"
+            )
+            from ia_modules.agents.executor import AgentConfig as IAAgentConfig, CLIType, AgentMode, EventType
+            from ia_modules.agents.subprocess_executor import SubprocessExecutor
+
+            cli_str = agent_config.get('cli_type', 'claude_code')
+            mode_str = agent_config.get('mode', 'research')
+            cli_map = {"claude_code": CLIType.CLAUDE_CODE, "opencode": CLIType.OPENCODE}
+            mode_map = {"research": AgentMode.RESEARCH, "execute": AgentMode.EXECUTE, "plan": AgentMode.PLAN}
+
+            ia_config = IAAgentConfig(
+                task=task,
+                cwd=cwd,
+                cli_type=cli_map.get(cli_str, CLIType.CLAUDE_CODE),
+                mode=mode_map.get(mode_str, AgentMode.RESEARCH),
+                tools=agent_config.get('tools') or ["Read", "Glob", "Grep"],
+                system_prompt=agent_config.get('system_prompt'),
+                model=agent_config.get('model'),
+                provider=agent_config.get('provider'),
+                api_key=agent_config.get('api_key'),
+                agent_id=agent.get('agent_id'),
+                job_id=activation_id,
+            )
+
+            executor = SubprocessExecutor()
+            async for event in executor.execute(ia_config):
+                event_dict = event.to_dict()
+                collected_events.append(event_dict)
+                if self._notification_callback:
+                    await self._notification_callback(activation_id, event_dict)
+
+        # Extract final result from events
+        final_text = ""
+        for evt in reversed(collected_events):
+            if isinstance(evt, dict):
+                if evt.get("type") == "result" and evt.get("result"):
+                    final_text = evt["result"]
+                    break
+                if evt.get("type") == "text" and evt.get("text"):
+                    final_text = evt["text"]
+                    break
+
+        end_time = datetime.now()
+        execution_time_ms = int((end_time - start_time).total_seconds() * 1000)
+        logger.info(f"[{self.context}] A2A agent completed in {execution_time_ms}ms ({len(collected_events)} events)")
+
+        return {
+            'output_data': {
+                'response': final_text,
+                'events': collected_events,
+                'agent_type': 'a2a',
+                'cli_type': agent_config.get('cli_type', 'claude_code'),
+            },
+            'execution_time_ms': execution_time_ms,
+            'status': 'completed'
+        }
     
     
     async def _get_provider_config(self, provider_id: str) -> Optional[Dict[str, Any]]:
@@ -1098,6 +1532,14 @@ class ActivationProcessor:
                 'error': str(e)
             }
     
+    async def _has_python_implementation(self, agent_id: str) -> bool:
+        """Check if an agent has a Python implementation file in agent_versions."""
+        version = await self._get_agent_version(agent_id, 'latest')
+        if not version:
+            return False
+        file_path = version.get('file_path', '')
+        return bool(file_path and file_path.endswith('.py'))
+
     async def _get_agent_details(self, agent_id: str) -> Optional[Dict[str, Any]]:
         """Get agent details from database."""
         query = "SELECT * FROM agents WHERE agent_id = :agent_id"
@@ -1206,17 +1648,6 @@ class ActivationProcessor:
                 'input_data': {...}
             }
         """
-        work_type = work_item.get('work_type')
-        
-        if work_type == 'agent':
-            return await self.process_activation(work_item)
-        elif work_type == 'pipeline':
-            return await self._process_pipeline_execution(work_item)
-        elif work_type == 'function':
-            return await self._process_function_execution(work_item)
-        else:
-            logger.error(f"Unknown work_type '{work_type}' received. Defaulting to agent activation.")
-            return await self.process_activation(work_item)
         work_type = work_item.get('work_type')
         
         if work_type == 'agent':

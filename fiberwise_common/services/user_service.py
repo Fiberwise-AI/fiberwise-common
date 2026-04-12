@@ -189,6 +189,11 @@ class UserService(BaseService):
         existing_user = await self.get_user_by_email(user_data['email'])
         if existing_user:
             raise ValidationError("Email already registered")
+
+        if user_data.get('username'):
+            existing_username = await self.get_user_by_username(user_data['username'])
+            if existing_username:
+                raise ValidationError("Username already taken")
         
         # Validate email format
         if not self._is_valid_email(user_data['email']):
@@ -209,9 +214,8 @@ class UserService(BaseService):
             user_data['full_name'] = f"{first} {last}".strip()
         
         now = datetime.now().isoformat()
-        user_id = None  # Let database auto-increment
-        user_uuid = str(uuid.uuid4())  # Generate UUID for the user
-        
+        user_uuid = str(uuid.uuid4())
+
         query = """
             INSERT INTO users (
                 uuid, email, username, hashed_password, first_name, last_name, full_name,
@@ -223,35 +227,32 @@ class UserService(BaseService):
                     :timezone, :locale, :created_at, :updated_at)
         """
 
-        await self.db.execute(
-            query,
-            {
-                "uuid": user_uuid,
-                "email": user_data['email'],
-                "username": user_data.get('username'),
-                "hashed_password": user_data.get('hashed_password'),
-                "first_name": user_data.get('first_name'),
-                "last_name": user_data.get('last_name'),
-                "full_name": user_data['full_name'],
-                "is_active": user_data.get('is_active', True),
-                "is_superuser": user_data.get('is_superuser', False),
-                "is_verified": user_data.get('is_verified', False),
-                "avatar_url": user_data.get('avatar_url'),
-                "timezone": user_data.get('timezone', 'UTC'),
-                "locale": user_data.get('locale', 'en'),
-                "created_at": now,
-                "updated_at": now,
-            }
-        )
-        
-        # Return the created user (without password)
+        params = {
+            "uuid": user_uuid,
+            "email": user_data['email'],
+            "username": user_data.get('username'),
+            "hashed_password": user_data.get('hashed_password'),
+            "first_name": user_data.get('first_name'),
+            "last_name": user_data.get('last_name'),
+            "full_name": user_data['full_name'],
+            "is_active": user_data.get('is_active', True),
+            "is_superuser": user_data.get('is_superuser', False),
+            "is_verified": user_data.get('is_verified', False),
+            "avatar_url": user_data.get('avatar_url'),
+            "timezone": user_data.get('timezone', 'UTC'),
+            "locale": user_data.get('locale', 'en'),
+            "created_at": now,
+            "updated_at": now,
+        }
+
+        await self.db.execute(query, params)
+
         created_user = await self.get_user_by_email(user_data['email'])
         if not created_user:
             raise ServiceError("Failed to create user")
-        
-        # Create a default organization for the user
+
         await self._create_default_organization(created_user)
-        
+
         return created_user
 
     async def update_user(self, user_id: int, user_data: Dict[str, Any]) -> Dict[str, Any]:

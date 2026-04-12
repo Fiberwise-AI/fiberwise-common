@@ -1,19 +1,17 @@
 from typing import Dict, List, Any, Optional
 import logging
-import uuid
 import json
 from datetime import datetime
-
-from ..schemas import AgentResponse
 
 from fiberwise_common import DatabaseProvider
 
 logger = logging.getLogger(__name__)
 
+
 class AppAgentService:
     """
-    Service for managing AI agents and their activations with app.
-    Provides methods for registering, configuring, and activating agents.
+    Service for managing AI agents within an app context.
+    Provides filtered queries for agents belonging to a specific app.
     """
     def __init__(self, db: DatabaseProvider):
         self.db = db
@@ -26,59 +24,66 @@ class AppAgentService:
         status: Optional[str] = None,
         limit: int = 10,
         offset: int = 0
-    ) -> List[AgentResponse]:
+    ) -> List[Dict[str, Any]]:
         """Get all agents for a specific app with filtering"""
         try:
-            # Build query with proper parameters
-            query_parts = ["SELECT * FROM agents WHERE app_id = :app_id"]
+            query_parts = ["""
+                SELECT agent_id, app_id, name, description, agent_type_id, config,
+                       metadata, is_active, is_enabled, created_by, created_at, updated_at
+                FROM agents WHERE app_id = :app_id
+            """]
             params = {"app_id": app_id}
 
-            # Add optional filters
             if agent_type_id:
                 query_parts.append("AND agent_type_id = :agent_type_id")
                 params["agent_type_id"] = agent_type_id
 
             if status:
-                is_active = status.lower() == 'enabled'
+                params["is_active"] = status.lower() == 'enabled'
                 query_parts.append("AND is_active = :is_active")
-                params["is_active"] = is_active
 
-            # Add order and pagination
             query_parts.append("ORDER BY name ASC")
             query_parts.append("LIMIT :limit OFFSET :offset")
             params["limit"] = limit
             params["offset"] = offset
 
-            # Execute query
             query = " ".join(query_parts)
             agent_records = await self.db.fetch_all(query, params)
-            
-            # Convert to response models, ensuring created_by is a string
-            agents = []
+
+            result = []
             for record in agent_records:
                 agent_dict = dict(record)
-                
-                # Convert created_by to string if it's not already
+
                 if agent_dict.get('created_by') is not None:
                     agent_dict['created_by'] = str(agent_dict['created_by'])
-                    
-                # Handle JSON fields
-                for field in ['configuration', 'parameters', 'config', 'metadata']:
-                    if field in agent_dict and isinstance(agent_dict[field], str):
+
+                # Parse JSON text fields, ensure result is always a dict
+                for field in ['config', 'metadata']:
+                    val = agent_dict.get(field)
+                    if isinstance(val, str):
                         try:
-                            agent_dict[field] = json.loads(agent_dict[field])
+                            val = json.loads(val)
                         except (json.JSONDecodeError, TypeError):
-                            # If parsing fails, keep it as a string or set to default
-                            agent_dict[field] = {} if agent_dict[field] else None
+                            val = {}
+                    agent_dict[field] = val if isinstance(val, dict) else {}
 
-                # Fix PostgreSQL datetime format for Pydantic (space->T, +00->+00:00)
+                # Parse timestamp strings to datetime objects
                 for field in ['created_at', 'updated_at']:
-                    if field in agent_dict and isinstance(agent_dict[field], str):
-                        agent_dict[field] = agent_dict[field].replace(' ', 'T').replace('+00', '+00:00', 1)
+                    val = agent_dict.get(field)
+                    if isinstance(val, str):
+                        try:
+                            agent_dict[field] = datetime.fromisoformat(val)
+                        except (ValueError, TypeError):
+                            pass
 
-                agents.append(AgentResponse(**agent_dict))
-                
-            return agents
+                # Frontend (app-agents-tab) expects `id` — keep agent_id as
+                # well for any callers that read the raw column name.
+                if 'agent_id' in agent_dict and 'id' not in agent_dict:
+                    agent_dict['id'] = str(agent_dict['agent_id'])
+
+                result.append(agent_dict)
+
+            return result
         except Exception as e:
             logger.error(f"Error retrieving agents: {str(e)}")
             raise

@@ -5,7 +5,7 @@ These models handle agent definitions, activations, and responses.
 
 from typing import Dict, Any, Optional, List
 from datetime import datetime
-from pydantic import BaseModel, Field, UUID4, ConfigDict
+from pydantic import BaseModel, Field, UUID4, ConfigDict, model_validator
 
 
 class AgentSummaryWeb(BaseModel):
@@ -216,14 +216,23 @@ class AgentUpdate(BaseModel):
 class AgentResponse(AgentBase):
     """Schema for agent response"""
     agent_id: UUID4
+    # Frontend (app-agents-tab) reads `id`; keep agent_id too for
+    # callers that use the raw column name.
+    id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     created_by: Optional[str] = None
     status: Optional[str] = None
     agent_type_name: Optional[str] = None
     credential_ids: Optional[List[str]] = None
-    
+
     model_config = ConfigDict(from_attributes=True)
+
+    @model_validator(mode="after")
+    def _populate_id_from_agent_id(self):
+        if self.id is None and self.agent_id is not None:
+            self.id = str(self.agent_id)
+        return self
 
 
 class AgentVersionInfo(BaseModel):

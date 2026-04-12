@@ -775,58 +775,54 @@ class FiberAppManager:
             
             print(f"[DEBUG] Found build script: {scripts['build']}")
             
-            # Check if node_modules exists, if not run npm install first
-            node_modules_path = app_path / "node_modules"
-            if not node_modules_path.exists():
-                print(f"[DEBUG] node_modules not found, running npm install first...")
-                
-                # Try different npm commands for install (Windows compatibility)
-                npm_commands = ['npm', 'npm.cmd', 'npm.exe']
-                install_result = None
-                
-                for npm_cmd in npm_commands:
-                    try:
-                        print(f"[DEBUG] Trying {npm_cmd} install command...")
-                        install_result = subprocess.run(
-                            [npm_cmd, 'install'],
-                            cwd=app_path,
-                            capture_output=True,
-                            text=True,
-                            timeout=300  # 5 minute timeout
-                        )
-                        print(f"[DEBUG] {npm_cmd} install command worked!")
-                        break
-                    except FileNotFoundError:
-                        print(f"[DEBUG] {npm_cmd} not found for install, trying next...")
-                        continue
-                
-                if install_result is None:
-                    # Try using PowerShell as a fallback (Windows)
-                    try:
-                        print(f"[DEBUG] Trying PowerShell npm install command...")
-                        install_result = subprocess.run(
-                            ['powershell', '-Command', 'npm install'],
-                            cwd=app_path,
-                            capture_output=True,
-                            text=True,
-                            timeout=300
-                        )
-                        print(f"[DEBUG] PowerShell npm install command worked!")
-                    except FileNotFoundError:
-                        print(f"[DEBUG] PowerShell not found for install either")
-                        
-                if install_result is None:
-                    return AppOperationResult(False, "npm command not found for install. Please ensure Node.js and npm are installed and in PATH.")
-                
-                if install_result.returncode != 0:
-                    print(f"[DEBUG] npm install failed with exit code {install_result.returncode}")
-                    print(f"[DEBUG] install stderr: {install_result.stderr}")
-                    return AppOperationResult(False, f"npm install failed: {install_result.stderr}")
-                
-                print(f"[DEBUG] npm install completed successfully")
-                print(f"[DEBUG] Install output: {install_result.stdout}")
-            else:
-                print(f"[DEBUG] node_modules exists, skipping npm install")
+            # Always run npm install to ensure dependencies are up to date
+            print(f"[DEBUG] Running npm install...")
+
+            # Try different npm commands for install (Windows compatibility)
+            npm_commands = ['npm', 'npm.cmd', 'npm.exe']
+            install_result = None
+
+            for npm_cmd in npm_commands:
+                try:
+                    print(f"[DEBUG] Trying {npm_cmd} install command...")
+                    install_result = subprocess.run(
+                        [npm_cmd, 'install'],
+                        cwd=app_path,
+                        capture_output=True,
+                        text=True,
+                        timeout=300  # 5 minute timeout
+                    )
+                    print(f"[DEBUG] {npm_cmd} install command worked!")
+                    break
+                except FileNotFoundError:
+                    print(f"[DEBUG] {npm_cmd} not found for install, trying next...")
+                    continue
+
+            if install_result is None:
+                # Try using PowerShell as a fallback (Windows)
+                try:
+                    print(f"[DEBUG] Trying PowerShell npm install command...")
+                    install_result = subprocess.run(
+                        ['powershell', '-Command', 'npm install'],
+                        cwd=app_path,
+                        capture_output=True,
+                        text=True,
+                        timeout=300
+                    )
+                    print(f"[DEBUG] PowerShell npm install command worked!")
+                except FileNotFoundError:
+                    print(f"[DEBUG] PowerShell not found for install either")
+
+            if install_result is None:
+                return AppOperationResult(False, "npm command not found for install. Please ensure Node.js and npm are installed and in PATH.")
+
+            if install_result.returncode != 0:
+                print(f"[DEBUG] npm install failed with exit code {install_result.returncode}")
+                print(f"[DEBUG] install stderr: {install_result.stderr}")
+                return AppOperationResult(False, f"npm install failed: {install_result.stderr}")
+
+            print(f"[DEBUG] npm install completed successfully")
+            print(f"[DEBUG] Install output: {install_result.stdout}")
             
             print(f"[DEBUG] Running npm run build in {app_path}")
             
@@ -972,7 +968,28 @@ class FiberAppManager:
                     
                     walk_pipelines_directory(pipelines_dir, app_path)
                     print(f"[DEBUG] Finished adding pipelines directory")
-                
+
+                # ALWAYS add pipeline step implementations if they exist
+                # Steps are Python modules referenced by pipeline YAML (module: steps)
+                steps_dir = app_path / "steps"
+                if steps_dir.exists() and steps_dir.is_dir():
+                    def walk_steps_directory(current_path, base_path):
+                        nonlocal files_added
+                        try:
+                            for item in current_path.iterdir():
+                                if item.is_file() and not item.name.endswith('.pyc'):
+                                    arcname = item.relative_to(base_path)
+                                    zipf.write(item, arcname)
+                                    files_added += 1
+                                    print(f"[DEBUG] Added step file: {arcname}")
+                                elif item.is_dir() and item.name != '__pycache__':
+                                    walk_steps_directory(item, base_path)
+                        except (OSError, PermissionError) as e:
+                            print(f"[DEBUG] Warning: Could not read steps directory {current_path}: {e}")
+
+                    walk_steps_directory(steps_dir, app_path)
+                    print(f"[DEBUG] Finished adding steps directory")
+
                 if dist_path.exists() and dist_path.is_dir():
                     # Bundle the contents of the dist folder for the built app
                     print(f"[DEBUG] Found dist folder, bundling contents from: {dist_path}")

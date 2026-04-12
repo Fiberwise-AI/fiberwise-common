@@ -18,7 +18,6 @@ from .execution_key_service import ExecutionKeyService
 from .scoped_storage_provider import ScopedStorageProvider
 from .agent_storage_provider import AgentStorageProvider
 from .storage_provider import StorageProvider, LocalStorageProvider, get_storage_provider
-from .llm_provider_service import LLMProviderService
 from .service_factory import ServiceFactory, ServiceContainer, create_service_factory, get_service_container, set_service_container
 from .cli_utils import get_default_config_name, load_config, save_config
 from .fiber_app_manager import FiberAppManager, AppOperationResult
@@ -85,7 +84,6 @@ __all__ = [
     'StorageProvider',
     'LocalStorageProvider',
     'get_storage_provider',
-    'LLMProviderService',
     'ServiceFactory',
     'ServiceContainer',
     'create_service_factory',

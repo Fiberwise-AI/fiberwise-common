@@ -1,0 +1,66 @@
+{
+  "id": "fiberwise-test-realm",
+  "realm": "fiberwise",
+  "displayName": "Fiberwise Test Realm",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+  "clientScopes": [
+    {
+      "name": "openid",
+      "protocol": "openid-connect",
+      "attributes": { "include.in.token.scope": "true" },
+      "protocolMappers": []
+    }
+  ],
+  "defaultDefaultClientScopes": ["openid"],
+  "defaultOptionalClientScopes": [],
+  "clients": [
+    {
+      "id": "fiberwise-admin-id",
+      "clientId": "fiberwise-admin",
+      "name": "Fiberwise Admin Service Account",
+      "description": "Service account for managing agent OIDC clients",
+      "enabled": true,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "fiberwise_admin_secret",
+      "bearerOnly": false,
+      "consentRequired": false,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "fullScopeAllowed": true,
+      "defaultClientScopes": ["openid"],
+      "optionalClientScopes": []
+    }
+  ],
+  "roles": {
+    "realm": [
+      {
+        "name": "admin",
+        "description": "Administrator"
+      }
+    ]
+  },
+  "users": [
+    {
+      "username": "service-account-fiberwise-admin",
+      "enabled": true,
+      "serviceAccountClientId": "fiberwise-admin",
+      "realmRoles": ["admin"],
+      "clientRoles": {
+        "realm-management": [
+          "manage-clients",
+          "view-clients",
+          "query-clients"
+        ]
+      }
+    }
+  ]
+}

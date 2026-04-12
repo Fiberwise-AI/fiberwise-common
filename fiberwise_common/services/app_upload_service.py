@@ -209,7 +209,10 @@ class AppUploadService:
 
             agent_code = getattr(agent_manifest, 'agent_code', agent_name.lower().replace(' ', '-'))
             description = getattr(agent_manifest, 'description', f"Agent for {agent_name}")
-            config = getattr(agent_manifest, 'config', {})
+            config = getattr(agent_manifest, 'config', None) or {}
+            pipeline_def = getattr(agent_manifest, 'pipeline_definition', None)
+            if pipeline_def:
+                config['pipeline_definition'] = pipeline_def
             is_enabled = getattr(agent_manifest, 'is_enabled', True)
 
             await self.db.execute(
@@ -1077,16 +1080,17 @@ class AppUploadService:
                     language, is_active, checksum
                 ) VALUES (
                     :code_id, :function_id, :name, :implementation_type, :file_path, :language, 1, :checksum
-                ) RETURNING code_id
+                )
             """
 
-            implementation_id = await self.db.fetch_val(
+            await self.db.execute(
                 query,
                 {"code_id": code_id, "function_id": str(function_id), "name": function.name,
                  "implementation_type": "file", "file_path": rel_entity_path,
                  "language": language, "checksum": checksum}
             )
-            
+            implementation_id = code_id
+
             logger.info(f"Created function implementation record: {implementation_id}")
             
             return {
@@ -1442,6 +1446,20 @@ class AppUploadService:
                 else:
                     logger.warning(f"⚠️  No pipelines directory found in bundle: {pipeline_source_dir}")
 
+                # Also copy steps/ directory from bundle root into pipeline entity bundle
+                # Pipeline YAML references step modules via `module: steps` which requires
+                # the steps/ package to be importable from the working directory (entity bundle)
+                steps_source_dir = os.path.join(bundle_source_dir, 'steps')
+                if os.path.exists(steps_source_dir) and os.path.isdir(steps_source_dir):
+                    import shutil
+                    steps_dest_dir = os.path.join(pipeline_bundle_dir, 'steps')
+                    if os.path.exists(steps_dest_dir):
+                        shutil.rmtree(steps_dest_dir)
+                    shutil.copytree(steps_source_dir, steps_dest_dir)
+                    logger.info(f"✅ Copied steps/ directory to pipeline entity bundle: {steps_dest_dir}")
+                else:
+                    logger.info(f"No steps/ directory found in bundle root: {steps_source_dir}")
+
                 # Record the successful processing
                 results.append({
                     'pipeline_id': pipeline_id,
@@ -1563,16 +1581,17 @@ class AppUploadService:
                     language, is_active, checksum
                 ) VALUES (
                     :code_id, :function_id, :name, :implementation_type, :content, :language, 1, :checksum
-                ) RETURNING code_id
+                )
             """
 
-            implementation_id = await self.db.fetch_val(
+            await self.db.execute(
                 query,
                 {"code_id": code_id, "function_id": str(function_id), "name": function.name,
                  "implementation_type": "content", "content": content,
                  "language": language, "checksum": checksum}
             )
-            
+            implementation_id = code_id
+
             logger.info(f"Created inline function implementation record: {implementation_id}")
             
             return {

@@ -10,6 +10,8 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, List
 
 from .base_service import BaseService
+from fiberwise_common.oidc_provider import get_adapter
+from fiberwise_common.oidc_provider.defaults import get_default_permissions
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +143,20 @@ class AgentKeyService(BaseService):
                     }
                 )
                 result = key_value
-            
+
+            # Register IDP client for OIDC-backed auth
+            a2a_perms = metadata.get('a2a_permissions') if metadata else None
+            if not a2a_perms:
+                agent_type = metadata.get('agent_type_id', 'llm') if metadata else 'llm'
+                a2a_perms = get_default_permissions(agent_type)
+            adapter = get_adapter(db=self.db)
+            creds = await adapter.register_client(
+                agent_id=agent_id,
+                org_id=organization_id or 0,
+                permissions=a2a_perms,
+            )
+            logger.info("Registered IDP client %s for agent %s", creds.client_id, agent_id)
+
             logger.info(f"Created agent API key {key_id} for app {app_id}, agent {agent_id}, org {organization_id}")
             return result
         except Exception as e:
@@ -182,7 +197,7 @@ class AgentKeyService(BaseService):
                         resource_pattern, created_by
                     FROM agent_api_keys
                     WHERE key_value = :key_value AND is_active = TRUE AND
-                        (expiration IS NULL OR expiration::timestamp > NOW())
+                        (expiration IS NULL OR datetime(expiration) > datetime('now'))
                 """
                 result = await self._fetch_one(query, {"key_value": agent_key})
             
@@ -328,25 +343,42 @@ class AgentKeyService(BaseService):
             logger.error(f"Error getting agent API keys: {e}")
             return []
 
-    async def create_app_agent_key(self, app_id: str, agent_id: str, created_by: int = 1) -> Optional[str]:
+    async def create_app_agent_key(
+        self,
+        app_id: str,
+        agent_id: str,
+        created_by: int = 1,
+        agent_type_id: str = 'processor',
+        a2a_permissions: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
         """
         Create a standard agent key for an app/agent pair with standard scopes.
-        
+
         Args:
             app_id: The app ID
-            agent_id: The agent ID  
+            agent_id: The agent ID
             created_by: User ID creating the key (defaults to 1)
-            
+            agent_type_id: Agent type for default permissions fallback
+            a2a_permissions: Explicit a2a permissions (overrides defaults)
+
         Returns:
             The generated API key value if successful, None otherwise
         """
         standard_scopes = [
             'data:read',
-            'data:write', 
+            'data:write',
             'activations:read',
             'agents:read'
         ]
-        
+
+        metadata = {
+            'auto_generated': True,
+            'key_type': 'standard_agent_key',
+            'agent_type_id': agent_type_id,
+        }
+        if a2a_permissions:
+            metadata['a2a_permissions'] = a2a_permissions
+
         return await self.create_agent_key(
             app_id=app_id,
             agent_id=agent_id,
@@ -355,8 +387,5 @@ class AgentKeyService(BaseService):
             expiration_hours=8760,  # 1 year
             resource_pattern=f"apps/{app_id}/*",
             created_by=created_by,
-            metadata={
-                'auto_generated': True,
-                'key_type': 'standard_agent_key'
-            }
+            metadata=metadata,
         )

@@ -515,21 +515,24 @@ class PipelineService(BaseService):
                 pipeline_filename = os.path.basename(pipeline_def_file)
                 resolved_file_path = os.path.join(pipeline_bundle_path, pipeline_filename)
 
-                # For system apps, use the app's source directory as working directory (for custom step imports)
-                # Otherwise use the pipeline bundle path
+                # Use the pipeline entity bundle as working directory.
+                # The bundle contains the pipeline YAML + steps/ directory (copied during deploy).
+                # Also check the system-apps source directory as a fallback (for Docker deployments
+                # where SYSTEM_APPS_DIR is mounted and contains step modules directly).
+                working_directory = pipeline_bundle_path
                 app_query = "SELECT app_slug FROM apps WHERE app_id = :app_id"
                 app_result = await self.db.fetch_one(app_query, {"app_id": str(pipeline.app_id)})
                 if app_result:
                     app_slug = app_result['app_slug']
-                    system_app_dir = f"/opt/fiberwise/system-apps/{app_slug}"
+                    system_apps_base = os.environ.get('SYSTEM_APPS_DIR', '/opt/fiberwise/system-apps')
+                    system_app_dir = os.path.join(system_apps_base, app_slug)
                     if os.path.exists(system_app_dir):
                         working_directory = system_app_dir
                         logger.info(f"Using system app directory as working directory: {system_app_dir}")
                     else:
-                        working_directory = pipeline_bundle_path
                         logger.info(f"Using pipeline bundle as working directory: {pipeline_bundle_path}")
                 else:
-                    working_directory = pipeline_bundle_path
+                    logger.info(f"Using pipeline bundle as working directory: {pipeline_bundle_path}")
 
                 logger.info(f"Resolved pipeline definition file: {resolved_file_path}")
             else:

@@ -69,6 +69,7 @@ class DatabaseManager:
         loop = asyncio.get_event_loop()
 
         def _run_migrations():
+            import sys as _sys, traceback as _tb
             db = NexusDB(self.database_url)
             db.connect()
             try:
@@ -77,13 +78,22 @@ class DatabaseManager:
                     migration_path=self.migrations_dir,
                     migration_type="system",
                 )
-                # MigrationRunner methods are async def but internally synchronous,
-                # so we run the coroutine in a new event loop on this thread.
                 inner_loop = asyncio.new_event_loop()
                 try:
-                    return inner_loop.run_until_complete(runner.run_pending_migrations())
+                    result = inner_loop.run_until_complete(runner.run_pending_migrations())
+                    if not result:
+                        print(f"[MIGRATION] run_pending_migrations() returned False for db: {self.database_url}", file=_sys.stderr, flush=True)
+                    return result
+                except Exception as e:
+                    print(f"[MIGRATION] Execution error: {e}", file=_sys.stderr, flush=True)
+                    _tb.print_exc(file=_sys.stderr)
+                    raise
                 finally:
                     inner_loop.close()
+            except Exception as e:
+                print(f"[MIGRATION] Setup error: {e}", file=_sys.stderr, flush=True)
+                _tb.print_exc(file=_sys.stderr)
+                raise
             finally:
                 db.disconnect()
 
@@ -99,7 +109,7 @@ class DatabaseManager:
             return True
 
         except Exception as e:
-            logger.error(f"Migration process failed: {e}")
+            logger.error(f"Migration process failed: {e}", exc_info=True)
             return False
 
     async def health_check(self) -> bool:

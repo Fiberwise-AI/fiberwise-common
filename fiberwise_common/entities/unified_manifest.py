@@ -131,12 +131,15 @@ class AppManifest(BaseModel):
     routes: Optional[List[Dict[str, Any]]] = []
     
 class AgentManifest(BaseModel):
-    """Agent manifest model - basic version for now"""
+    """Agent manifest model"""
     name: str
     version: str
     agent_type_id: Optional[str] = None
     description: Optional[str] = None
     implementation_path: Optional[str] = None
+    pipeline_definition: Optional[str] = None
+    config: Optional[Dict[str, Any]] = None
+    permissions: Optional[Dict[str, Any]] = None
 
 class PipelineManifest(BaseModel):
     """Pipeline manifest model with support for multiple execution engines."""

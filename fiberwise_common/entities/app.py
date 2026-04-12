@@ -94,6 +94,25 @@ class FieldCreate(BaseModel):
     is_system_field: bool = False
 
 
+class FieldRead(BaseModel):
+    """Schema for reading app model fields."""
+    field_id: UUID
+    model_id: UUID
+    field_column: str
+    name: str
+    data_type: str
+    is_required: bool = False
+    is_unique: bool = False
+    is_primary_key: bool = False
+    is_system_field: bool = False
+    default_value_json: Optional[Any] = None
+    validations_json: Optional[Any] = None
+    relation_details_json: Optional[Any] = None
+
+    class Config:
+        from_attributes = True
+
+
 # --- Model Schemas ---
 
 class ModelCreate(BaseModel):
@@ -116,7 +135,8 @@ class ModelRead(BaseModel):
     created_at: str
     updated_at: str
     is_active: bool = True
-    
+    fields: List[FieldRead] = []
+
     class Config:
         from_attributes = True
 

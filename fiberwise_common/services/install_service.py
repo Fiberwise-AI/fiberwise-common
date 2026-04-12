@@ -130,6 +130,18 @@ async def _create_new_agent(conn, agent_manifest: AgentManifest, agent_slug: str
 
     # Get configuration/config with default
     config = getattr(agent_manifest, 'config', getattr(agent_manifest, 'configuration', {}))
+    if not isinstance(config, dict):
+        config = {}
+
+    # Merge pipeline_definition into config for processor agents
+    pipeline_def = getattr(agent_manifest, 'pipeline_definition', None)
+    if pipeline_def:
+        config['pipeline_definition'] = pipeline_def
+
+    # Store manifest permissions in config for use during agent key creation
+    manifest_permissions = getattr(agent_manifest, 'permissions', None)
+    if manifest_permissions:
+        config['a2a_permissions'] = manifest_permissions
 
     # Get is_enabled with default
     is_enabled = getattr(agent_manifest, 'is_enabled', True)
@@ -265,6 +277,13 @@ async def _create_agent_version(conn, agent_id, agent_manifest, current_user: Us
 
     # Get configuration/config with default
     config = getattr(agent_manifest, 'config', getattr(agent_manifest, 'configuration', {}))
+    if not isinstance(config, dict):
+        config = {}
+
+    # Merge pipeline_definition into config for processor agents
+    pipeline_def = getattr(agent_manifest, 'pipeline_definition', None)
+    if pipeline_def:
+        config['pipeline_definition'] = pipeline_def
 
     # Serialize config dictionary to JSON string
     config_json = json.dumps(config)
