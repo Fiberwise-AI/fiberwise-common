@@ -217,21 +217,23 @@ class ActivationProcessor:
             user_id = activation.get('created_by')
             
             if user_id and app_id:
-                # Create LLM service with user context (optional — may not be needed for A2A/processor agents)
-                try:
-                    from ..services.llm_provider_service import LLMProviderService
-                    from ..services.llm_service_factory import LLMServiceFactory
-                    
-                    llm_service_with_context = LLMProviderService(
-                        db_provider=self.db,
-                        user_id=user_id,
-                        llm_service_factory=LLMServiceFactory()
-                    )
-                    service_registry.register_service("llm_service", llm_service_with_context)
-                    logger.info(f"Registered LLM service with user_id: {user_id}")
-                except Exception as llm_err:
-                    logger.warning(f"LLM service not available (A2A mode?): {llm_err}")
-                
+                # DEPRECATED — llm_service no longer injected into agents.
+                # Agents should create activations or spawn sub-agents for LLM calls.
+                # LLM calls are handled by ia_modules at the platform level.
+                # try:
+                #     from ..services.llm_provider_service import LLMProviderService
+                #     from ..services.llm_service_factory import LLMServiceFactory
+                #
+                #     llm_service_with_context = LLMProviderService(
+                #         db_provider=self.db,
+                #         user_id=user_id,
+                #         llm_service_factory=LLMServiceFactory()
+                #     )
+                #     service_registry.register_service("llm_service", llm_service_with_context)
+                #     logger.info(f"Registered LLM service with user_id: {user_id}")
+                # except Exception as llm_err:
+                #     logger.warning(f"LLM service not available (A2A mode?): {llm_err}")
+
                 # Create OAuth service with user context (if needed)
                 try:
                     from ..services.oauth_service import OAuthService
@@ -300,13 +302,14 @@ class ActivationProcessor:
             
             # Create context-aware services
             if created_by and app_id:
-                from ..services.llm_provider_service import LLMProviderService
-                from ..services.llm_service_factory import LLMServiceFactory
-                llm_service = LLMProviderService(
-                    db_provider=self.db, user_id=created_by, llm_service_factory=LLMServiceFactory()
-                )
-                service_registry.register_service("llm_service", llm_service)
-                
+                # DEPRECATED — llm_service no longer injected into agents.
+                # from ..services.llm_provider_service import LLMProviderService
+                # from ..services.llm_service_factory import LLMServiceFactory
+                # llm_service = LLMProviderService(
+                #     db_provider=self.db, user_id=created_by, llm_service_factory=LLMServiceFactory()
+                # )
+                # service_registry.register_service("llm_service", llm_service)
+
                 from ..services.oauth_service import OAuthService
                 oauth_service = OAuthService(db_provider=self.db)
                 service_registry.register_service("oauth_service", oauth_service)
@@ -1302,7 +1305,7 @@ class ActivationProcessor:
                         # Populate _injected_services from service_registry
                         self._injected_services = {
                             'fiber': service_registry.get_service('fiber'),
-                            'llm_service': service_registry.get_service('llm_service'),
+                            # 'llm_service': service_registry.get_service('llm_service'),  # DEPRECATED
                             'storage': service_registry.get_service('storage'),
                             'oauth_service': service_registry.get_service('oauth_service')
                         }
@@ -1941,7 +1944,7 @@ class ActivationProcessor:
                 if service_registry:
                     self._injected_services = {
                         'fiber': service_registry.get_service('fiber'),
-                        'llm_service': service_registry.get_service('llm_service'),
+                        # 'llm_service': service_registry.get_service('llm_service'),  # DEPRECATED
                         'storage': service_registry.get_service('storage'),
                         'oauth_service': service_registry.get_service('oauth_service')
                     }

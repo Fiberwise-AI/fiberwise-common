@@ -1,6 +1,8 @@
 """
-LLM Provider service for FiberWise SDK.
-Manages LLM provider connections and standardizes responses.
+DEPRECATED — LLM Service Factory
+Agents should not call LLM APIs directly. Use activations or sub-agents instead.
+LLM calls are handled by ia_modules at the platform level.
+Kept for reference; will be removed in a future release.
 """
 
 import json

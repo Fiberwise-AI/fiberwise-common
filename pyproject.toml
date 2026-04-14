@@ -1,6 +1,6 @@
 [project]
 name = "fiberwise-common"
-version = "0.1.7"
+version = "0.1.8"
 description = "Common services and utilities for FiberWise applications"
 authors = [
     {name = "FiberWise", email = "dev@fiberwise.ai"},
@@ -19,7 +19,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "ia_modules>=0.1.3",
+    "ia_modules @ file:///C:/Users/David/Notes/MatterWave/tools/ia_modules",
     "pydantic>=2.0.0",
     "email-validator>=1.1.0",
     "pydantic-settings>=2.0",

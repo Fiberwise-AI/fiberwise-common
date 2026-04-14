@@ -12,7 +12,7 @@ from .entities.fiber_agent import FiberAgent, FiberInjectable
 # Services are available via fiberwise_common.services
 # Business entities are available via fiberwise_common.entities
 
-__version__ = "0.1.0"
+__version__ = "0.1.8"
 __all__ = [
     "DatabaseProvider",
     "NexusQLProvider",

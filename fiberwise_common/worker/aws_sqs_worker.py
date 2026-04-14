@@ -131,7 +131,7 @@ class AWSSQSWorker(WorkerProvider):
             # Setup service injection
             services = {
                 'fiber': service_registry.get_service('fiber_app'),
-                'llm_service': service_registry.get_service('llm_service'),
+                # 'llm_service': service_registry.get_service('llm_service'),  # DEPRECATED
                 'storage': service_registry.get_service('storage'),
                 'oauth_service': service_registry.get_service('oauth_service')
             }

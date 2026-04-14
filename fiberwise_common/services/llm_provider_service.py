@@ -1,7 +1,8 @@
 """
-LLM Provider Service - migrated from fiberwise-core-web/worker
-Manages LLM provider connections and standardizes responses.
-Provides a unified interface for different LLM providers.
+DEPRECATED — LLM Provider Service
+Agents should not call LLM APIs directly. Use activations or sub-agents instead.
+LLM calls are handled by ia_modules at the platform level.
+Kept for reference; will be removed in a future release.
 """
 
 import json

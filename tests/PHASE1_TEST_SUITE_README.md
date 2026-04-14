@@ -1,5 +1,7 @@
 # Phase 1 Integration Test Suite
 
+> **PARTIALLY OUTDATED** — References to `LLMServiceFactory` and `llm_service` injection are **deprecated**. `LLMProviderFactory` tests remain valid. Agent LLM access now uses `SubprocessAgentAdapter`.
+
 Comprehensive test suite for Phase 1 integration covering FiberAgent, LLMProviderFactory, and the complete activation flow.
 
 ## Overview
